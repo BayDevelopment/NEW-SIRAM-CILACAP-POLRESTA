@@ -21,7 +21,8 @@ Route::middleware(['auth', 'verified'])->group(function () {
         ->except(['create', 'show', 'edit']);
 
     Route::resource('anggota', AnggotaController::class)
-        ->except(['create', 'show', 'edit']);
+        ->except(['create', 'show', 'edit'])
+        ->parameters(['anggota' => 'anggota']);
 });
 
 require __DIR__ . '/settings.php';

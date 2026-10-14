@@ -12,15 +12,23 @@ use Inertia\Response;
 
 class AnggotaController extends Controller
 {
-    /* ------------------------------------------------------------------
-     | INDEX
-     * ---------------------------------------------------------------- */
+    /*
+    |--------------------------------------------------------------------------
+    | INDEX
+    |--------------------------------------------------------------------------
+    */
 
     public function index(Request $request): Response
     {
-        $search = trim((string) $request->input('search', ''));
-        $unitId = $request->input('unit_id', '');
-        $status = $request->input('status', '');
+        $filters = $request->validate([
+            'search' => ['nullable', 'string', 'max:100'],
+            'unit_id' => ['nullable', 'integer', 'min:1'],
+            'status' => ['nullable', Rule::in(['aktif', 'nonaktif'])],
+        ]);
+
+        $search = trim($filters['search'] ?? '');
+        $unitId = $filters['unit_id'] ?? '';
+        $status = $filters['status'] ?? '';
 
         $anggota = Anggota::query()
             ->with([
@@ -29,21 +37,21 @@ class AnggotaController extends Controller
             ])
             ->when($search !== '', function ($query) use ($search) {
                 $query->where(function ($q) use ($search) {
-                    $q->where('nama_lengkap', 'like', "%{$search}%")
-                        ->orWhere('nrp', 'like', "%{$search}%")
-                        ->orWhere('pangkat', 'like', "%{$search}%")
-                        ->orWhere('jabatan', 'like', "%{$search}%")
-                        ->orWhere('email', 'like', "%{$search}%");
+                    $keyword = '%' . $search . '%';
+
+                    $q->where('nama_lengkap', 'like', $keyword)
+                        ->orWhere('nrp', 'like', $keyword)
+                        ->orWhere('pangkat', 'like', $keyword)
+                        ->orWhere('jabatan', 'like', $keyword)
+                        ->orWhere('email', 'like', $keyword);
                 });
             })
             ->when(
-                $unitId !== ''
-                    && filter_var($unitId, FILTER_VALIDATE_INT) !== false
-                    && (int) $unitId > 0,
-                fn($query) => $query->where('unit_id', (int) $unitId)
+                $unitId !== '',
+                fn($query) => $query->where('unit_id', $unitId)
             )
             ->when(
-                in_array($status, ['aktif', 'nonaktif'], true),
+                $status !== '',
                 fn($query) => $query->where(
                     'is_active',
                     $status === 'aktif'
@@ -63,11 +71,9 @@ class AnggotaController extends Controller
         return Inertia::render('anggota/index', [
             'anggota' => $anggota,
             'stats' => $stats,
-
             'unitOptions' => Unit::query()
                 ->orderBy('nama_unit')
                 ->get(['id', 'nama_unit']),
-
             'filters' => [
                 'search' => $search,
                 'unit_id' => $unitId,
@@ -76,15 +82,19 @@ class AnggotaController extends Controller
         ]);
     }
 
-    /* ------------------------------------------------------------------
-     | STORE
-     * ---------------------------------------------------------------- */
+    /*
+    |--------------------------------------------------------------------------
+    | STORE
+    |--------------------------------------------------------------------------
+    */
 
     public function store(Request $request): RedirectResponse
     {
+        $this->normalizeInput($request);
+
         $data = $request->validate(
             $this->rules(),
-            [],
+            $this->messages(),
             $this->attributes()
         );
 
@@ -96,17 +106,21 @@ class AnggotaController extends Controller
         );
     }
 
-    /* ------------------------------------------------------------------
-     | UPDATE
-     * ---------------------------------------------------------------- */
+    /*
+    |--------------------------------------------------------------------------
+    | UPDATE
+    |--------------------------------------------------------------------------
+    */
 
     public function update(
         Request $request,
         Anggota $anggota
     ): RedirectResponse {
+        $this->normalizeInput($request);
+
         $data = $request->validate(
             $this->rules($anggota),
-            [],
+            $this->messages(),
             $this->attributes()
         );
 
@@ -118,12 +132,25 @@ class AnggotaController extends Controller
         );
     }
 
-    /* ------------------------------------------------------------------
-     | DESTROY (SOFT DELETE)
-     * ---------------------------------------------------------------- */
+    /*
+    |--------------------------------------------------------------------------
+    | DESTROY (SOFT DELETE)
+    |--------------------------------------------------------------------------
+    */
 
     public function destroy(Anggota $anggota): RedirectResponse
     {
+        if (
+            $anggota->penghunian()
+            ->where('status', 'aktif')
+            ->exists()
+        ) {
+            return back()->with(
+                'error',
+                'Anggota tidak dapat dihapus karena masih memiliki penghunian aktif.'
+            );
+        }
+
         $anggota->delete();
 
         return back()->with(
@@ -132,9 +159,78 @@ class AnggotaController extends Controller
         );
     }
 
-    /* ------------------------------------------------------------------
-     | VALIDATION
-     * ---------------------------------------------------------------- */
+    /*
+    |--------------------------------------------------------------------------
+    | INPUT NORMALIZATION
+    |--------------------------------------------------------------------------
+    */
+
+    private function normalizeInput(Request $request): void
+    {
+        $fields = [
+            'nrp',
+            'nama_lengkap',
+            'pangkat',
+            'jabatan',
+            'tempat_lahir',
+            'no_hp',
+            'alamat',
+        ];
+
+        foreach ($fields as $field) {
+            $value = $request->input($field);
+
+            if (is_string($value)) {
+                $value = trim($value);
+
+                $request->merge([
+                    $field => $value === '' ? null : $value,
+                ]);
+            }
+        }
+
+        // No HP: buang spasi/tanda baca, samakan +62 / 62 menjadi 0
+        $noHp = $request->input('no_hp');
+
+        if (is_string($noHp)) {
+            $noHp = preg_replace('/[\s\-\.\(\)]+/', '', $noHp);
+
+            if (str_starts_with($noHp, '+62')) {
+                $noHp = '0' . substr($noHp, 3);
+            } elseif (str_starts_with($noHp, '62')) {
+                $noHp = '0' . substr($noHp, 2);
+            }
+
+            $request->merge([
+                'no_hp' => $noHp === '' ? null : $noHp,
+            ]);
+        }
+
+        $email = $request->input('email');
+
+        if (is_string($email)) {
+            $email = mb_strtolower(trim($email));
+
+            $request->merge([
+                'email' => $email === '' ? null : $email,
+            ]);
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | VALIDATION RULES
+    |--------------------------------------------------------------------------
+    */
+
+    private function uniqueRule(string $column, ?Anggota $anggota = null)
+    {
+        return Rule::unique('anggota', $column)
+            ->ignore(
+                $anggota?->getKey(),
+                $anggota?->getKeyName() ?? 'id'
+            );
+    }
 
     private function rules(?Anggota $anggota = null): array
     {
@@ -142,14 +238,15 @@ class AnggotaController extends Controller
             'user_id' => [
                 'nullable',
                 'integer',
+                'min:1',
                 'exists:users,id',
-                Rule::unique('anggota', 'user_id')
-                    ->ignore($anggota?->id),
+                $this->uniqueRule('user_id', $anggota),
             ],
 
             'unit_id' => [
                 'required',
                 'integer',
+                'min:1',
                 'exists:units,id',
             ],
 
@@ -157,14 +254,15 @@ class AnggotaController extends Controller
                 'required',
                 'string',
                 'max:30',
-                Rule::unique('anggota', 'nrp')
-                    ->ignore($anggota?->id),
+                'regex:/^[A-Za-z0-9\/.-]+$/',
+                $this->uniqueRule('nrp', $anggota),
             ],
 
             'nama_lengkap' => [
                 'required',
                 'string',
                 'max:150',
+                $this->uniqueRule('nama_lengkap', $anggota),
             ],
 
             'pangkat' => [
@@ -200,12 +298,15 @@ class AnggotaController extends Controller
                 'nullable',
                 'string',
                 'max:30',
+                'regex:/^[0-9]{8,15}$/',
+                $this->uniqueRule('no_hp', $anggota),
             ],
 
             'email' => [
                 'nullable',
-                'email',
+                'email:rfc',
                 'max:255',
+                $this->uniqueRule('email', $anggota),
             ],
 
             'alamat' => [
@@ -221,9 +322,36 @@ class AnggotaController extends Controller
         ];
     }
 
-    /* ------------------------------------------------------------------
-     | VALIDATION ATTRIBUTES
-     * ---------------------------------------------------------------- */
+    /*
+    |--------------------------------------------------------------------------
+    | VALIDATION MESSAGES
+    |--------------------------------------------------------------------------
+    */
+
+    private function messages(): array
+    {
+        return [
+            'required' => ':attribute wajib diisi.',
+            'integer' => ':attribute harus berupa angka bulat.',
+            'min' => ':attribute minimal :min.',
+            'string' => ':attribute harus berupa teks.',
+            'max' => ':attribute maksimal :max karakter.',
+            'exists' => ':attribute yang dipilih tidak ditemukan.',
+            'unique' => ':attribute sudah digunakan oleh anggota lain.',
+            'email' => 'Format :attribute tidak valid.',
+            'date' => 'Format :attribute tidak valid.',
+            'before_or_equal' => ':attribute tidak boleh melebihi hari ini.',
+            'in' => 'Pilihan :attribute tidak valid.',
+            'boolean' => ':attribute harus berupa status yang valid.',
+            'regex' => 'Format :attribute tidak valid.',
+        ];
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | VALIDATION ATTRIBUTES
+    |--------------------------------------------------------------------------
+    */
 
     private function attributes(): array
     {
@@ -241,6 +369,8 @@ class AnggotaController extends Controller
             'email' => 'email',
             'alamat' => 'alamat',
             'is_active' => 'status keaktifan',
+            'search' => 'pencarian',
+            'status' => 'status anggota',
         ];
     }
 }
