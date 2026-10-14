@@ -15,6 +15,7 @@ void createInertiaApp({
             case name === "welcome":
             case name === "auth/login":
             case name === "auth/forgot-password":
+            case name === "auth/verify-email":
                 return null; // halaman ini memakai desain full-screen sendiri
             case name.startsWith("auth/"):
                 return AuthLayout;
