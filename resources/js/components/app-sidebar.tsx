@@ -7,11 +7,9 @@ import {
     Landmark,
     LayoutGrid,
     UserRound,
-    Users,
     Wrench,
 } from "lucide-react";
 
-import AppLogo from "@/components/app-logo";
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "@/components/nav-user";
 
@@ -48,11 +46,6 @@ const mainNavItems: NavItem[] = [
         title: "Anggota",
         href: "/anggota",
         icon: UserRound,
-    },
-    {
-        title: "Penghuni",
-        href: "/penghuni",
-        icon: Users,
     },
     {
         title: "Penghunian",
@@ -96,11 +89,11 @@ export function AppSidebar() {
                             asChild
                             tooltip="SIRAM MANAGEMENT - POLRESTA CILACAP"
                             className="
-                    h-auto min-h-14 rounded-xl px-2 py-2
-                    transition-all duration-200
-                    hover:bg-[#0f2f5f]/5
-                    dark:hover:bg-white/5
-                "
+                                h-auto min-h-14 rounded-xl px-2 py-2
+                                transition-all duration-200
+                                hover:bg-[#0f2f5f]/5
+                                dark:hover:bg-white/5
+                            "
                         >
                             <Link href={dashboard()} prefetch>
                                 <img
@@ -123,6 +116,7 @@ export function AppSidebar() {
                     </SidebarMenuItem>
                 </SidebarMenu>
             </SidebarHeader>
+
             <SidebarContent className="px-2 py-3">
                 <div className="mb-2 px-2 text-[10px] font-bold uppercase tracking-[0.16em] text-muted-foreground group-data-[collapsible=icon]:hidden">
                     Menu Utama
@@ -133,19 +127,15 @@ export function AppSidebar() {
                         [&_[data-sidebar=menu-button]]:rounded-xl
                         [&_[data-sidebar=menu-button]]:transition-all
                         [&_[data-sidebar=menu-button]]:duration-200
-
                         [&_[data-sidebar=menu-button]]:hover:bg-[#0f2f5f]/5
                         [&_[data-sidebar=menu-button]]:hover:text-[#0f2f5f]
                         [&_[data-sidebar=menu-button]]:hover:[&>svg]:text-[#d4af37]
-
                         dark:[&_[data-sidebar=menu-button]]:hover:bg-white/5
                         dark:[&_[data-sidebar=menu-button]]:hover:text-white
-
                         [&_[data-sidebar=menu-button][data-active=true]]:bg-[#0f2f5f]
                         [&_[data-sidebar=menu-button][data-active=true]]:text-white
                         [&_[data-sidebar=menu-button][data-active=true]]:shadow-sm
                         [&_[data-sidebar=menu-button][data-active=true]_svg]:text-[#d4af37]
-
                         dark:[&_[data-sidebar=menu-button][data-active=true]]:bg-[#0f2f5f]
                         dark:[&_[data-sidebar=menu-button][data-active=true]]:text-white
                         dark:[&_[data-sidebar=menu-button][data-active=true]_svg]:text-[#d4af37]
@@ -154,6 +144,7 @@ export function AppSidebar() {
                     <NavMain items={mainNavItems} />
                 </div>
             </SidebarContent>
+
             <SidebarFooter className="border-t border-[#0f2f5f]/10 pt-2 dark:border-white/10">
                 <NavUser />
             </SidebarFooter>
