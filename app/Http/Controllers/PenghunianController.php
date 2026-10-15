@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Anggota;
 use App\Models\Hunian;
 use App\Models\Penghunian;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -24,11 +25,12 @@ class PenghunianController extends Controller
     {
         $search = trim((string) $request->input('search', ''));
         $status = (string) $request->input('status', '');
+        $editingId = $request->integer('editing_id');
 
         $penghunian = Penghunian::query()
             ->with([
                 'anggota:id,nama_lengkap,nrp',
-                'hunian:id,unit_id,kode_hunian,nama_hunian',
+                'hunian:id,unit_id,kode_hunian,nama_hunian,status_operasional',
                 'hunian.unit:id,nama_unit',
                 'penyetuju:id,name',
             ])
@@ -61,14 +63,11 @@ class PenghunianController extends Controller
 
         /*
          * Anggota yang belum memiliki penghunian aktif.
-         *
-         * Anggota yang sedang menghuni tetap dikecualikan,
-         * tetapi anggota pada catatan yang sedang diedit
-         * tetap dimasukkan agar nilai edit tidak hilang.
+         * Anggota pada catatan yang sedang diedit tetap ditampilkan.
          */
         $anggotaOptions = Anggota::query()
             ->select(['id', 'nama_lengkap', 'nrp'])
-            ->where(function ($query) use ($request) {
+            ->where(function ($query) use ($editingId) {
                 $query->whereNotIn(
                     'id',
                     Penghunian::query()
@@ -76,12 +75,8 @@ class PenghunianController extends Controller
                         ->where('status', Penghunian::STATUS_AKTIF)
                 );
 
-                $editingId = $request->input('editing_id');
-
                 if ($editingId) {
-                    $current = Penghunian::query()
-                        ->whereKey($editingId)
-                        ->first();
+                    $current = Penghunian::query()->find($editingId);
 
                     if ($current) {
                         $query->orWhere('id', $current->anggota_id);
@@ -92,14 +87,17 @@ class PenghunianController extends Controller
             ->get();
 
         /*
-         * Hunian yang tersedia dan belum memiliki penghunian aktif.
+         * Hunian yang bisa dipilih:
+         * - status operasional tersedia;
+         * - tidak memiliki penghunian aktif lain;
+         * - tidak memiliki pemeliharaan yang masih dilaporkan/diproses.
          *
-         * Hunian yang sedang dipakai oleh catatan yang diedit
-         * tetap dimasukkan agar form edit tetap menampilkan nilainya.
+         * Hunian dari catatan yang sedang diedit tetap dimasukkan
+         * agar nilai lama tetap terlihat di form edit.
          */
         $hunianOptions = Hunian::query()
             ->with('unit:id,nama_unit')
-            ->where(function ($query) use ($request) {
+            ->where(function ($query) use ($editingId) {
                 $query->where(function ($q) {
                     $q->where('status_operasional', 'tersedia')
                         ->whereNotIn(
@@ -107,15 +105,17 @@ class PenghunianController extends Controller
                             Penghunian::query()
                                 ->select('hunian_id')
                                 ->where('status', Penghunian::STATUS_AKTIF)
+                        )
+                        ->whereNotIn(
+                            'id',
+                            DB::table('maintenance_hunian')
+                                ->select('hunian_id')
+                                ->whereIn('status', ['dilaporkan', 'diproses'])
                         );
                 });
 
-                $editingId = $request->input('editing_id');
-
                 if ($editingId) {
-                    $current = Penghunian::query()
-                        ->whereKey($editingId)
-                        ->first();
+                    $current = Penghunian::query()->find($editingId);
 
                     if ($current) {
                         $query->orWhere('id', $current->hunian_id);
@@ -133,17 +133,14 @@ class PenghunianController extends Controller
 
         return Inertia::render('penghunian/index', [
             'penghunian' => $penghunian,
-
             'stats' => [
                 'total' => (int) $counts->sum(),
                 'aktif' => (int) ($counts[Penghunian::STATUS_AKTIF] ?? 0),
                 'selesai' => (int) ($counts[Penghunian::STATUS_SELESAI] ?? 0),
                 'dibatalkan' => (int) ($counts[Penghunian::STATUS_DIBATALKAN] ?? 0),
             ],
-
             'anggotaOptions' => $anggotaOptions,
             'hunianOptions' => $hunianOptions,
-
             'filters' => [
                 'search' => $search,
                 'status' => $status,
@@ -198,7 +195,7 @@ class PenghunianController extends Controller
 
                 $penghunian = Penghunian::create($data);
 
-                $this->syncHunianStatus($penghunian->hunian_id);
+                $this->syncHunianStatus((int) $penghunian->hunian_id);
             });
         } catch (Throwable $exception) {
             if ($documentPath) {
@@ -230,24 +227,24 @@ class PenghunianController extends Controller
         $oldDocumentPath = $penghunian->dokumen_perjanjian;
         $newDocumentPath = null;
 
-        if ($request->hasFile('dokumen_perjanjian')) {
-            $newDocumentPath = $request
-                ->file('dokumen_perjanjian')
-                ->store('penghunian/dokumen', 'public');
+        try {
+            if ($request->hasFile('dokumen_perjanjian')) {
+                $newDocumentPath = $request
+                    ->file('dokumen_perjanjian')
+                    ->store('penghunian/dokumen', 'public');
 
-            if (! $newDocumentPath) {
-                throw ValidationException::withMessages([
-                    'dokumen_perjanjian' =>
-                    'Dokumen perjanjian gagal diunggah.',
-                ]);
+                if (! $newDocumentPath) {
+                    throw ValidationException::withMessages([
+                        'dokumen_perjanjian' =>
+                        'Dokumen perjanjian gagal diunggah.',
+                    ]);
+                }
+
+                $data['dokumen_perjanjian'] = $newDocumentPath;
+            } else {
+                unset($data['dokumen_perjanjian']);
             }
 
-            $data['dokumen_perjanjian'] = $newDocumentPath;
-        } else {
-            unset($data['dokumen_perjanjian']);
-        }
-
-        try {
             DB::transaction(function () use (
                 $request,
                 $penghunian,
@@ -258,7 +255,7 @@ class PenghunianController extends Controller
                     ->lockForUpdate()
                     ->firstOrFail();
 
-                $oldHunianId = $current->hunian_id;
+                $oldHunianId = (int) $current->hunian_id;
 
                 $this->ensureNoConflict($data, $current);
 
@@ -274,12 +271,12 @@ class PenghunianController extends Controller
 
                 $current->update($data);
 
-                foreach (
-                    array_unique([
-                        (int) $oldHunianId,
-                        (int) $current->hunian_id,
-                    ]) as $hunianId
-                ) {
+                $hunianIds = array_unique([
+                    $oldHunianId,
+                    (int) $current->hunian_id,
+                ]);
+
+                foreach ($hunianIds as $hunianId) {
                     $this->syncHunianStatus($hunianId);
                 }
             });
@@ -311,23 +308,121 @@ class PenghunianController extends Controller
     public function destroy(
         Penghunian $penghunian
     ): RedirectResponse {
+        $documentPath = $penghunian->dokumen_perjanjian;
+
         DB::transaction(function () use ($penghunian) {
             $current = Penghunian::query()
                 ->whereKey($penghunian->id)
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            $hunianId = $current->hunian_id;
+            $hunianId = (int) $current->hunian_id;
 
             $current->delete();
 
             $this->syncHunianStatus($hunianId);
         });
 
+        if ($documentPath) {
+            Storage::disk('public')->delete($documentPath);
+        }
+
         return back()->with(
             'success',
             'Data penghunian berhasil dihapus.'
         );
+    }
+
+    /**
+     * OPTIONS ANGGOTA UNTUK DROPDOWN PENCARIAN
+     */
+    public function optionsAnggota(Request $request): JsonResponse
+    {
+        $search = trim((string) $request->query('q', ''));
+
+        $items = Anggota::query()
+            ->select(['id', 'nama_lengkap', 'nrp'])
+            ->whereNotIn(
+                'id',
+                Penghunian::query()
+                    ->select('anggota_id')
+                    ->where('status', Penghunian::STATUS_AKTIF)
+            )
+            ->when($search !== '', function ($query) use ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('nama_lengkap', 'like', "%{$search}%")
+                        ->orWhere('nrp', 'like', "%{$search}%");
+                });
+            })
+            ->orderBy('nama_lengkap')
+            ->limit(30)
+            ->get();
+
+        return response()->json($items);
+    }
+
+    /**
+     * OPTIONS HUNIAN UNTUK DROPDOWN PENCARIAN
+     */
+    public function optionsHunian(Request $request): JsonResponse
+    {
+        $search = trim((string) $request->query('q', ''));
+        $editingId = $request->integer('editing_id');
+
+        $query = Hunian::query()
+            ->with('unit:id,nama_unit')
+            ->where('status_operasional', 'tersedia')
+            ->whereNotIn(
+                'id',
+                Penghunian::query()
+                    ->select('hunian_id')
+                    ->where('status', Penghunian::STATUS_AKTIF)
+            )
+            ->whereNotIn(
+                'id',
+                DB::table('maintenance_hunian')
+                    ->select('hunian_id')
+                    ->whereIn('status', ['dilaporkan', 'diproses'])
+            );
+
+        /*
+         * Saat edit, tetap izinkan hunian yang sudah terhubung
+         * dengan catatan saat ini agar pilihan tidak hilang.
+         * Pemeriksaan konflik tetap dilakukan saat penyimpanan.
+         */
+        if ($editingId) {
+            $current = Penghunian::query()->find($editingId);
+
+            if ($current) {
+                $query->orWhere('id', $current->hunian_id);
+            }
+        }
+
+        $items = $query
+            ->when($search !== '', function ($query) use ($search) {
+                $query->where(function ($q) use ($search) {
+                    $q->where('kode_hunian', 'like', "%{$search}%")
+                        ->orWhere('nama_hunian', 'like', "%{$search}%")
+                        ->orWhereHas('unit', function ($unitQuery) use ($search) {
+                            $unitQuery->where(
+                                'nama_unit',
+                                'like',
+                                "%{$search}%"
+                            );
+                        });
+                });
+            })
+            ->orderBy('kode_hunian')
+            ->limit(30)
+            ->get([
+                'id',
+                'unit_id',
+                'kode_hunian',
+                'nama_hunian',
+                'status_operasional',
+            ]);
+
+        return response()->json($items);
     }
 
     /**
@@ -341,41 +436,34 @@ class PenghunianController extends Controller
                 'integer',
                 'exists:anggota,id',
             ],
-
             'hunian_id' => [
                 'required',
                 'integer',
                 'exists:hunian,id',
             ],
-
             'tanggal_mulai' => [
                 'required',
                 'date',
             ],
-
             'tanggal_selesai' => [
                 'required',
                 'date',
                 'after_or_equal:tanggal_mulai',
             ],
-
             'status' => [
                 'required',
                 Rule::in(Penghunian::STATUS),
             ],
-
             'alasan_penghunian' => [
                 'nullable',
                 'string',
                 'max:2000',
             ],
-
             'keterangan' => [
                 'nullable',
                 'string',
                 'max:2000',
             ],
-
             'dokumen_perjanjian' => [
                 'nullable',
                 'file',
@@ -465,6 +553,18 @@ class PenghunianController extends Controller
             ]);
         }
 
+        $sedangPemeliharaan = DB::table('maintenance_hunian')
+            ->where('hunian_id', $hunian->id)
+            ->whereIn('status', ['dilaporkan', 'diproses'])
+            ->exists();
+
+        if ($sedangPemeliharaan) {
+            throw ValidationException::withMessages([
+                'hunian_id' =>
+                'Hunian sedang dalam proses pemeliharaan dan tidak dapat dipilih.',
+            ]);
+        }
+
         if ($hunian->status_operasional !== 'tersedia') {
             $label = match ($hunian->status_operasional) {
                 'dihuni' => 'sudah dihuni',
@@ -481,7 +581,7 @@ class PenghunianController extends Controller
     }
 
     /**
-     * SYNC HUNIAN STATUS
+     * SYNC STATUS HUNIAN
      */
     private function syncHunianStatus(int $hunianId): void
     {
@@ -494,6 +594,10 @@ class PenghunianController extends Controller
             return;
         }
 
+        /*
+         * Jangan menimpa status khusus yang dikelola oleh modul hunian
+         * atau pemeliharaan.
+         */
         if (in_array(
             $hunian->status_operasional,
             ['perbaikan', 'tidak_layak'],
