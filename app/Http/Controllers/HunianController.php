@@ -22,12 +22,66 @@ class HunianController extends Controller
     ];
 
     /**
+     * Unit yang boleh diakses user.
+     * - superadmin : null (semua unit)
+     * - anggota    : unit_id miliknya (wajib terhubung ke unit)
+     */
+    private function scopedUnitId(Request $request): ?int
+    {
+        $user = $request->user();
+
+        if ($user->role === 'superadmin') {
+            return null;
+        }
+
+        abort_if(
+            ! $user->unit_id,
+            403,
+            'Akun Anda belum terhubung ke satuan.'
+        );
+
+        return (int) $user->unit_id;
+    }
+
+    /**
+     * Pastikan hunian berada pada unit yang boleh diakses user.
+     */
+    private function authorizeUnit(Request $request, Hunian $hunian): void
+    {
+        $unitId = $this->scopedUnitId($request);
+
+        abort_if(
+            $unitId !== null && (int) $hunian->unit_id !== $unitId,
+            403,
+            'Anda tidak memiliki akses ke hunian satuan lain.'
+        );
+    }
+
+    /**
+     * Aturan validasi unit_id.
+     */
+    private function unitRule(): array
+    {
+        return [
+            'required',
+            'integer',
+            Rule::exists('units', 'id'),
+        ];
+    }
+
+    /**
      * Menampilkan data hunian.
      */
     public function index(Request $request): Response
     {
+        $unitId = $this->scopedUnitId($request);
+
         $hunian = Hunian::query()
             ->with('unit:id,nama_unit')
+            ->when(
+                $unitId,
+                fn($query) => $query->where('unit_id', $unitId)
+            )
             ->when($request->filled('search'), function ($query) use ($request) {
                 $search = trim($request->string('search')->toString());
 
@@ -64,12 +118,31 @@ class HunianController extends Controller
         $units = Unit::query()
             ->select('id', 'nama_unit')
             ->where('is_active', true)
+            ->when(
+                $unitId,
+                fn($query) => $query->whereKey($unitId)
+            )
             ->orderBy('nama_unit')
             ->get();
+
+        // Statistik keseluruhan (bukan hanya halaman aktif).
+        $stats = Hunian::query()
+            ->when(
+                $unitId,
+                fn($query) => $query->where('unit_id', $unitId)
+            )
+            ->selectRaw('status_operasional, COUNT(*) as total')
+            ->groupBy('status_operasional')
+            ->pluck('total', 'status_operasional');
 
         return Inertia::render('hunian/index', [
             'hunian' => $hunian,
             'units' => $units,
+            'stats' => [
+                'tersedia' => (int) ($stats['tersedia'] ?? 0),
+                'dihuni' => (int) ($stats['dihuni'] ?? 0),
+                'perbaikan' => (int) ($stats['perbaikan'] ?? 0),
+            ],
             'filters' => [
                 'search' => $request->input('search', ''),
                 'jenis_hunian' => $request->input('jenis_hunian', ''),
@@ -87,12 +160,10 @@ class HunianController extends Controller
      */
     public function store(Request $request): RedirectResponse
     {
+        $unitId = $this->scopedUnitId($request);
+
         $validated = $request->validate([
-            'unit_id' => [
-                'required',
-                'integer',
-                Rule::exists('units', 'id'),
-            ],
+            'unit_id' => $this->unitRule(),
 
             'jenis_hunian' => [
                 'required',
@@ -126,6 +197,11 @@ class HunianController extends Controller
             'keterangan' => ['nullable', 'string'],
         ]);
 
+        // Anggota: unit selalu dipaksa mengikuti akun.
+        if ($unitId !== null) {
+            $validated['unit_id'] = $unitId;
+        }
+
         // Jangan membuat hunian baru dengan status perbaikan
         // atau kondisi rusak tanpa laporan pemeliharaan.
         if (
@@ -155,12 +231,12 @@ class HunianController extends Controller
         Request $request,
         Hunian $hunian
     ): RedirectResponse {
+        $this->authorizeUnit($request, $hunian);
+
+        $unitId = $this->scopedUnitId($request);
+
         $validated = $request->validate([
-            'unit_id' => [
-                'required',
-                'integer',
-                Rule::exists('units', 'id'),
-            ],
+            'unit_id' => $this->unitRule(),
 
             'kode_hunian' => [
                 'required',
@@ -201,13 +277,18 @@ class HunianController extends Controller
             'keterangan' => ['nullable', 'string'],
         ]);
 
+        // Anggota tidak boleh memindahkan hunian ke satuan lain.
+        if ($unitId !== null) {
+            $validated['unit_id'] = $unitId;
+        }
+
         DB::transaction(function () use ($validated, $hunian) {
             $current = Hunian::query()
                 ->whereKey($hunian->id)
                 ->lockForUpdate()
                 ->firstOrFail();
 
-            // Cari semua laporan pemeliharaan yang masih aktif.
+            // Cari laporan pemeliharaan aktif (prioritas kerusakan berat).
             $maintenanceAktif = MaintenanceHunian::query()
                 ->where('hunian_id', $current->id)
                 ->whereIn('status', self::STATUS_MAINTENANCE_AKTIF)
@@ -226,8 +307,7 @@ class HunianController extends Controller
                     ? 'rusak_berat'
                     : 'rusak_ringan';
 
-                // Pastikan data lama yang mungkin belum sinkron
-                // mengikuti laporan pemeliharaan aktif.
+                // Sinkronkan data lama yang belum sesuai laporan aktif.
                 if (
                     $current->status_operasional !== 'perbaikan'
                     || $current->kondisi !== $kondisiSeharusnya
@@ -248,11 +328,10 @@ class HunianController extends Controller
                     ]);
                 }
             } else {
-                // Tanpa laporan aktif, kondisi rusak tetap tidak boleh
-                // ditandai tersedia atau dihuni.
                 $kondisiBaru = $validated['kondisi'];
                 $statusBaru = $validated['status_operasional'];
 
+                // Kondisi rusak harus berstatus perbaikan.
                 if (
                     in_array(
                         $kondisiBaru,
@@ -267,8 +346,7 @@ class HunianController extends Controller
                     ]);
                 }
 
-                // Status perbaikan tidak boleh dipilih jika kondisi
-                // sudah baik dan tidak ada laporan aktif.
+                // Perbaikan tanpa laporan aktif tidak valid jika kondisi baik.
                 if (
                     $kondisiBaru === 'baik'
                     && $statusBaru === 'perbaikan'
@@ -304,8 +382,12 @@ class HunianController extends Controller
     /**
      * Menghapus data hunian.
      */
-    public function destroy(Hunian $hunian): RedirectResponse
-    {
+    public function destroy(
+        Request $request,
+        Hunian $hunian
+    ): RedirectResponse {
+        $this->authorizeUnit($request, $hunian);
+
         $sedangPemeliharaan = MaintenanceHunian::query()
             ->where('hunian_id', $hunian->id)
             ->whereIn('status', self::STATUS_MAINTENANCE_AKTIF)

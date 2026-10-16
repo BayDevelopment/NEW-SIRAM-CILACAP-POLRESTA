@@ -11,6 +11,12 @@ return new class extends Migration
         Schema::create('units', function (Blueprint $table) {
             $table->id();
 
+            // Relasi hierarki: Polsek berada di bawah Polresta
+            $table->foreignId('parent_id')
+                ->nullable()
+                ->constrained('units')
+                ->restrictOnDelete();
+
             $table->string('kode_unit', 30)->unique();
             $table->string('nama_unit', 150);
 
@@ -29,6 +35,7 @@ return new class extends Migration
             $table->timestamps();
 
             $table->index(['tipe_unit', 'is_active']);
+            $table->index(['parent_id', 'tipe_unit', 'is_active']);
         });
     }
 

@@ -1,4 +1,4 @@
-import { Link } from "@inertiajs/react";
+import { Link, usePage } from "@inertiajs/react";
 import {
     ArrowLeftRight,
     Building2,
@@ -25,6 +25,14 @@ import {
 
 import { dashboard } from "@/routes";
 import type { NavItem } from "@/types";
+
+type SidebarPageProps = {
+    auth?: {
+        user?: {
+            role?: string | { name?: string } | null;
+        } | null;
+    };
+};
 
 const mainNavItems: NavItem[] = [
     {
@@ -69,7 +77,38 @@ const mainNavItems: NavItem[] = [
     },
 ];
 
+const anggotaAllowedMenus = [
+    "Dashboard",
+    "Hunian",
+    "Penghunian",
+    "Pemeliharaan",
+];
+
 export function AppSidebar() {
+    const page = usePage();
+    const props = page.props as typeof page.props & SidebarPageProps;
+
+    const rawRole = props.auth?.user?.role;
+
+    const role = typeof rawRole === "string" ? rawRole : (rawRole?.name ?? "");
+
+    const isSuperadmin = role === "superadmin";
+    const isAnggota = role === "anggota";
+
+    // Terapkan prinsip fail-closed:
+    // hanya role yang dikenal yang mendapatkan menu aplikasi.
+    const visibleNavItems = mainNavItems.filter((item) => {
+        if (isSuperadmin) {
+            return true;
+        }
+
+        if (isAnggota) {
+            return anggotaAllowedMenus.includes(item.title);
+        }
+
+        return false;
+    });
+
     return (
         <Sidebar
             collapsible="icon"
@@ -141,7 +180,7 @@ export function AppSidebar() {
                         dark:[&_[data-sidebar=menu-button][data-active=true]_svg]:text-[#d4af37]
                     "
                 >
-                    <NavMain items={mainNavItems} />
+                    <NavMain items={visibleNavItems} />
                 </div>
             </SidebarContent>
 

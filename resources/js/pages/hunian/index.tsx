@@ -1,5 +1,6 @@
 import { Head, router, useForm, usePage } from "@inertiajs/react";
 import {
+    AlertTriangle,
     Building2,
     CheckCircle2,
     ChevronLeft,
@@ -8,11 +9,11 @@ import {
     Eye,
     Filter,
     Loader2,
+    Lock,
     Plus,
     Search,
     Trash2,
     X,
-    AlertTriangle,
 } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { toast } from "sonner";
@@ -21,10 +22,7 @@ import { toast } from "sonner";
    TYPE
 ============================================================================ */
 
-type Unit = {
-    id: number;
-    nama_unit: string;
-};
+type Unit = { id: number; nama_unit: string };
 
 type Hunian = {
     id: number;
@@ -46,11 +44,7 @@ type Hunian = {
     created_at: string;
 };
 
-type PaginationLink = {
-    url: string | null;
-    label: string;
-    active: boolean;
-};
+type PaginationLink = { url: string | null; label: string; active: boolean };
 
 type PaginatedHunian = {
     data: Hunian[];
@@ -69,6 +63,8 @@ type Filters = {
     status_operasional: string;
 };
 
+type Stats = { tersedia: number; dihuni: number; perbaikan: number };
+
 type Flash = {
     success?: string;
     error?: string;
@@ -76,11 +72,19 @@ type Flash = {
     info?: string;
 };
 
+type AuthUser = {
+    role?: string | { name?: string } | null;
+    unit_id?: number | null;
+} | null;
+
 type PageProps = {
     hunian: PaginatedHunian;
     units: Unit[];
+    stats: Stats;
     filters: Filters;
     flash?: Flash;
+    auth?: { user?: AuthUser };
+    errors?: Record<string, string>;
 };
 
 type HunianForm = {
@@ -128,6 +132,25 @@ const EMPTY_FORM: HunianForm = {
     keterangan: "",
 };
 
+const JENIS: Record<string, string> = {
+    rumah_dinas: "Rumah Dinas",
+    mes: "Mes / Asrama",
+    apartemen: "Apartemen",
+};
+
+const KONDISI: Record<string, string> = {
+    baik: "Baik",
+    rusak_ringan: "Rusak Ringan",
+    rusak_berat: "Rusak Berat",
+};
+
+const STATUS: Record<string, string> = {
+    tersedia: "Tersedia",
+    dihuni: "Dihuni",
+    perbaikan: "Perbaikan",
+    tidak_layak: "Tidak Layak",
+};
+
 const inputBase =
     "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 transition focus:border-[#0f2f5f] focus:outline-none focus:ring-2 focus:ring-[#0f2f5f]/15 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:disabled:bg-slate-800";
 
@@ -137,48 +160,18 @@ const selectBase =
 const textareaBase =
     "w-full resize-none rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 transition focus:border-[#0f2f5f] focus:outline-none focus:ring-2 focus:ring-[#0f2f5f]/15 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500";
 
+const th =
+    "px-5 py-4 text-xs font-bold uppercase tracking-wider text-slate-500";
+
 /* ============================================================================
    HELPER
 ============================================================================ */
 
-function toStr(value: unknown): string {
-    if (value === null || value === undefined) {
-        return "";
-    }
+const toStr = (value: unknown): string =>
+    value === null || value === undefined ? "" : String(value);
 
-    return String(value);
-}
-
-function jenisLabel(value: string): string {
-    const labels: Record<string, string> = {
-        rumah_dinas: "Rumah Dinas",
-        mes: "Mes / Asrama",
-        apartemen: "Apartemen",
-    };
-
-    return labels[value] ?? value;
-}
-
-function kondisiLabel(value: string): string {
-    const labels: Record<string, string> = {
-        baik: "Baik",
-        rusak_ringan: "Rusak Ringan",
-        rusak_berat: "Rusak Berat",
-    };
-
-    return labels[value] ?? value;
-}
-
-function statusLabel(value: string): string {
-    const labels: Record<string, string> = {
-        tersedia: "Tersedia",
-        dihuni: "Dihuni",
-        perbaikan: "Perbaikan",
-        tidak_layak: "Tidak Layak",
-    };
-
-    return labels[value] ?? value;
-}
+const label = (map: Record<string, string>, value: string): string =>
+    map[value] ?? value;
 
 function kondisiClass(value: string): string {
     if (value === "baik") {
@@ -227,12 +220,24 @@ function toFormData(item: Hunian): HunianForm {
     };
 }
 
+function Options({ map }: { map: Record<string, string> }) {
+    return (
+        <>
+            {Object.entries(map).map(([value, text]) => (
+                <option key={value} value={value}>
+                    {text}
+                </option>
+            ))}
+        </>
+    );
+}
+
 /* ============================================================================
    SMALL COMPONENT
 ============================================================================ */
 
 function Field({
-    label,
+    label: text,
     required = false,
     error,
     children,
@@ -245,7 +250,7 @@ function Field({
     return (
         <div className="space-y-1.5">
             <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                {label}
+                {text}
                 {required && <span className="ml-1 text-red-500">*</span>}
             </label>
 
@@ -317,12 +322,104 @@ function Modal({
     );
 }
 
+function StatCard({
+    title,
+    value,
+    icon,
+}: {
+    title: string;
+    value: number;
+    icon: ReactNode;
+}) {
+    return (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
+            <div className="flex items-center justify-between">
+                <div>
+                    <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+                        {title}
+                    </p>
+
+                    <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
+                        {value}
+                    </p>
+                </div>
+
+                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#0f2f5f]/10 text-[#0f2f5f] dark:bg-[#d4af37]/10 dark:text-[#d4af37]">
+                    {icon}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ActionButton({
+    children,
+    title,
+    onClick,
+    danger = false,
+}: {
+    children: ReactNode;
+    title: string;
+    onClick: () => void;
+    danger?: boolean;
+}) {
+    return (
+        <button
+            type="button"
+            title={title}
+            onClick={onClick}
+            className={`rounded-lg p-2 transition ${
+                danger
+                    ? "text-red-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10"
+                    : "text-slate-500 hover:bg-[#0f2f5f]/10 hover:text-[#0f2f5f] dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white"
+            }`}
+        >
+            {children}
+        </button>
+    );
+}
+
+function DetailItem({ label: text, value }: { label: string; value: string }) {
+    return (
+        <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                {text}
+            </p>
+
+            <p className="mt-1 text-sm font-medium text-slate-800 dark:text-slate-200">
+                {value}
+            </p>
+        </div>
+    );
+}
+
 /* ============================================================================
    PAGE
 ============================================================================ */
 
 export default function HunianIndex() {
-    const { hunian, units, filters, flash } = usePage<PageProps>().props;
+    const { hunian, units, stats, filters, flash, auth } =
+        usePage<PageProps>().props;
+
+    /* ------------------------------------------------------------------------
+       ROLE (superadmin & anggota)
+       - superadmin : semua unit
+       - anggota    : hanya unit miliknya (dibatasi juga di controller)
+    ------------------------------------------------------------------------ */
+
+    const rawRole = auth?.user?.role;
+    const role = typeof rawRole === "string" ? rawRole : (rawRole?.name ?? "");
+
+    const isSuperadmin = role === "superadmin";
+    const isAnggota = role === "anggota";
+
+    const canManage = isSuperadmin || isAnggota;
+
+    const lockedUnitId =
+        isAnggota && auth?.user?.unit_id ? String(auth.user.unit_id) : null;
+
+    const unitName = (id: string) =>
+        units.find((unit) => String(unit.id) === id)?.nama_unit ?? "";
 
     const [modal, setModal] = useState<ModalState>(null);
 
@@ -342,21 +439,10 @@ export default function HunianIndex() {
     ------------------------------------------------------------------------ */
 
     useEffect(() => {
-        if (flash?.success) {
-            toast.success(flash.success);
-        }
-
-        if (flash?.error) {
-            toast.error(flash.error);
-        }
-
-        if (flash?.warning) {
-            toast.warning(flash.warning);
-        }
-
-        if (flash?.info) {
-            toast.info(flash.info);
-        }
+        if (flash?.success) toast.success(flash.success);
+        if (flash?.error) toast.error(flash.error);
+        if (flash?.warning) toast.warning(flash.warning);
+        if (flash?.info) toast.info(flash.info);
     }, [flash]);
 
     /* ------------------------------------------------------------------------
@@ -370,39 +456,34 @@ export default function HunianIndex() {
     };
 
     const openCreate = () => {
+        if (!canManage) return;
+
         form.reset();
         form.clearErrors();
 
         form.setData({
             ...EMPTY_FORM,
-            unit_id: units.length > 0 ? String(units[0].id) : "",
+            unit_id:
+                lockedUnitId ?? (units.length > 0 ? String(units[0].id) : ""),
         });
 
         setModal({ type: "create" });
     };
 
     const openEdit = (item: Hunian) => {
+        if (!canManage) return;
+
         form.clearErrors();
         form.setData(toFormData(item));
-
-        setModal({
-            type: "edit",
-            item,
-        });
+        setModal({ type: "edit", item });
     };
 
-    const openShow = (item: Hunian) => {
-        setModal({
-            type: "show",
-            item,
-        });
-    };
+    const openShow = (item: Hunian) => setModal({ type: "show", item });
 
     const openDelete = (item: Hunian) => {
-        setModal({
-            type: "delete",
-            item,
-        });
+        if (!canManage) return;
+
+        setModal({ type: "delete", item });
     };
 
     /* ------------------------------------------------------------------------
@@ -412,36 +493,34 @@ export default function HunianIndex() {
     const submit = (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
+        if (!canManage) return;
+
+        // Anggota: unit dipaksa sesuai akun (controller juga memaksa).
+        const withUnit = (data: HunianForm): HunianForm =>
+            lockedUnitId ? { ...data, unit_id: lockedUnitId } : data;
+
         if (modal?.type === "create") {
-            /*
-             * kode_hunian dibuat otomatis oleh controller.
-             * Jadi jangan kirim kode_hunian saat create.
-             */
+            // kode_hunian dibuat otomatis oleh sistem.
+            form.transform((data) => {
+                const { kode_hunian: _kode, ...rest } = withUnit(data);
 
-            const { kode_hunian: _kodeHunian, ...createData } = form.data;
-
-            form.transform(() => createData as HunianForm);
+                return rest as HunianForm;
+            });
 
             form.post("/hunian", {
                 preserveScroll: true,
-
-                onSuccess: () => {
-                    closeModal();
-                },
+                onSuccess: closeModal,
             });
 
             return;
         }
 
         if (modal?.type === "edit") {
-            form.transform((data) => data);
+            form.transform((data) => withUnit(data));
 
             form.put(`/hunian/${modal.item.id}`, {
                 preserveScroll: true,
-
-                onSuccess: () => {
-                    closeModal();
-                },
+                onSuccess: closeModal,
             });
         }
     };
@@ -451,22 +530,21 @@ export default function HunianIndex() {
     ------------------------------------------------------------------------ */
 
     const deleteHunian = () => {
-        if (modal?.type !== "delete") {
-            return;
-        }
+        if (!canManage || modal?.type !== "delete") return;
 
         setDeleting(true);
 
         router.delete(`/hunian/${modal.item.id}`, {
             preserveScroll: true,
+            onSuccess: closeModal,
+            onError: (errors) => {
+                const first = Object.values(errors)[0];
 
-            onSuccess: () => {
+                if (first) toast.error(first);
+
                 closeModal();
             },
-
-            onFinish: () => {
-                setDeleting(false);
-            },
+            onFinish: () => setDeleting(false),
         });
     };
 
@@ -483,10 +561,7 @@ export default function HunianIndex() {
                 kondisi: kondisiFilter || undefined,
                 status_operasional: statusFilter || undefined,
             },
-            {
-                preserveState: true,
-                preserveScroll: true,
-            },
+            { preserveState: true, preserveScroll: true },
         );
     };
 
@@ -499,10 +574,7 @@ export default function HunianIndex() {
         router.get(
             "/hunian",
             {},
-            {
-                preserveState: true,
-                preserveScroll: true,
-            },
+            { preserveState: true, preserveScroll: true },
         );
     };
 
@@ -515,19 +587,14 @@ export default function HunianIndex() {
             <Head title="Data Hunian" />
 
             <div className="siram-stagger flex flex-1 flex-col gap-6 p-4 md:p-6">
-                {/* ============================================================
-                    HEADER
-                ============================================================ */}
+                {/* HEADER */}
 
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
                         <div className="mb-1 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                             <Building2 className="h-4 w-4" />
-
                             <span>Data Master</span>
-
                             <span>/</span>
-
                             <span className="font-medium text-[#0f2f5f] dark:text-white">
                                 Hunian
                             </span>
@@ -538,24 +605,26 @@ export default function HunianIndex() {
                         </h1>
 
                         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                            Kelola data rumah dinas, mes/asrama, dan apartemen.
+                            {isAnggota
+                                ? "Kelola data hunian pada satuan Anda."
+                                : "Kelola data rumah dinas, mes/asrama, dan apartemen."}
                         </p>
                     </div>
 
-                    <button
-                        type="button"
-                        onClick={openCreate}
-                        disabled={units.length === 0}
-                        className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[#0f2f5f] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0b254a] disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                        <Plus className="h-4 w-4" />
-                        Tambah Hunian
-                    </button>
+                    {canManage && (
+                        <button
+                            type="button"
+                            onClick={openCreate}
+                            disabled={units.length === 0}
+                            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-[#0f2f5f] px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0b254a] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <Plus className="h-4 w-4" />
+                            Tambah Hunian
+                        </button>
+                    )}
                 </div>
 
-                {/* ============================================================
-                    INFO JIKA BELUM ADA UNIT
-                ============================================================ */}
+                {/* INFO JIKA BELUM ADA UNIT */}
 
                 {units.length === 0 && (
                     <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300">
@@ -567,16 +636,15 @@ export default function HunianIndex() {
                             </p>
 
                             <p className="mt-1 text-sm">
-                                Tambahkan unit terlebih dahulu sebelum
-                                menambahkan data hunian.
+                                {isAnggota
+                                    ? "Satuan Anda tidak aktif atau belum tersedia. Hubungi superadmin."
+                                    : "Tambahkan unit terlebih dahulu sebelum menambahkan data hunian."}
                             </p>
                         </div>
                     </div>
                 )}
 
-                {/* ============================================================
-                    STAT
-                ============================================================ */}
+                {/* STAT */}
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <StatCard
@@ -587,40 +655,24 @@ export default function HunianIndex() {
 
                     <StatCard
                         title="Tersedia"
-                        value={
-                            hunian.data.filter(
-                                (item) =>
-                                    item.status_operasional === "tersedia",
-                            ).length
-                        }
+                        value={stats.tersedia}
                         icon={<CheckCircle2 className="h-5 w-5" />}
                     />
 
                     <StatCard
                         title="Dihuni"
-                        value={
-                            hunian.data.filter(
-                                (item) => item.status_operasional === "dihuni",
-                            ).length
-                        }
+                        value={stats.dihuni}
                         icon={<Building2 className="h-5 w-5" />}
                     />
 
                     <StatCard
                         title="Perbaikan"
-                        value={
-                            hunian.data.filter(
-                                (item) =>
-                                    item.status_operasional === "perbaikan",
-                            ).length
-                        }
+                        value={stats.perbaikan}
                         icon={<AlertTriangle className="h-5 w-5" />}
                     />
                 </div>
 
-                {/* ============================================================
-                    FILTER
-                ============================================================ */}
+                {/* FILTER */}
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div className="mb-4 flex items-center gap-2">
@@ -642,9 +694,7 @@ export default function HunianIndex() {
                                     setSearch(event.target.value)
                                 }
                                 onKeyDown={(event) => {
-                                    if (event.key === "Enter") {
-                                        applyFilter();
-                                    }
+                                    if (event.key === "Enter") applyFilter();
                                 }}
                                 placeholder="Cari kode, nama, alamat..."
                                 className={`${inputBase} pl-9`}
@@ -659,12 +709,7 @@ export default function HunianIndex() {
                             className={selectBase}
                         >
                             <option value="">Semua Jenis</option>
-
-                            <option value="rumah_dinas">Rumah Dinas</option>
-
-                            <option value="mes">Mes / Asrama</option>
-
-                            <option value="apartemen">Apartemen</option>
+                            <Options map={JENIS} />
                         </select>
 
                         <select
@@ -675,12 +720,7 @@ export default function HunianIndex() {
                             className={selectBase}
                         >
                             <option value="">Semua Kondisi</option>
-
-                            <option value="baik">Baik</option>
-
-                            <option value="rusak_ringan">Rusak Ringan</option>
-
-                            <option value="rusak_berat">Rusak Berat</option>
+                            <Options map={KONDISI} />
                         </select>
 
                         <select
@@ -691,14 +731,7 @@ export default function HunianIndex() {
                             className={selectBase}
                         >
                             <option value="">Semua Status</option>
-
-                            <option value="tersedia">Tersedia</option>
-
-                            <option value="dihuni">Dihuni</option>
-
-                            <option value="perbaikan">Perbaikan</option>
-
-                            <option value="tidak_layak">Tidak Layak</option>
+                            <Options map={STATUS} />
                         </select>
                     </div>
 
@@ -721,38 +754,19 @@ export default function HunianIndex() {
                     </div>
                 </div>
 
-                {/* ============================================================
-                    TABLE
-                ============================================================ */}
+                {/* TABLE */}
 
                 <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div className="overflow-x-auto">
                         <table className="w-full min-w-[1100px] text-left">
                             <thead>
                                 <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
-                                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
-                                        Hunian
-                                    </th>
-
-                                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
-                                        Unit
-                                    </th>
-
-                                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
-                                        Jenis
-                                    </th>
-
-                                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
-                                        Kondisi
-                                    </th>
-
-                                    <th className="px-5 py-4 text-xs font-bold uppercase tracking-wider text-slate-500">
-                                        Status
-                                    </th>
-
-                                    <th className="px-5 py-4 text-right text-xs font-bold uppercase tracking-wider text-slate-500">
-                                        Aksi
-                                    </th>
+                                    <th className={th}>Hunian</th>
+                                    <th className={th}>Unit</th>
+                                    <th className={th}>Jenis</th>
+                                    <th className={th}>Kondisi</th>
+                                    <th className={th}>Status</th>
+                                    <th className={`${th} text-right`}>Aksi</th>
                                 </tr>
                             </thead>
 
@@ -781,31 +795,27 @@ export default function HunianIndex() {
                                             className="transition hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
                                         >
                                             <td className="px-5 py-4">
-                                                <div>
-                                                    <p className="font-bold text-[#0f2f5f] dark:text-white">
-                                                        {item.kode_hunian}
-                                                    </p>
+                                                <p className="font-bold text-[#0f2f5f] dark:text-white">
+                                                    {item.kode_hunian}
+                                                </p>
 
-                                                    <p className="mt-0.5 font-medium text-slate-800 dark:text-slate-200">
-                                                        {item.nama_hunian}
-                                                    </p>
+                                                <p className="mt-0.5 font-medium text-slate-800 dark:text-slate-200">
+                                                    {item.nama_hunian}
+                                                </p>
 
-                                                    <p className="mt-1 max-w-xs truncate text-xs text-slate-500">
-                                                        {item.alamat}
-                                                    </p>
-                                                </div>
+                                                <p className="mt-1 max-w-xs truncate text-xs text-slate-500">
+                                                    {item.alamat}
+                                                </p>
                                             </td>
 
-                                            <td className="px-5 py-4">
-                                                <span className="text-sm text-slate-700 dark:text-slate-300">
-                                                    {item.unit?.nama_unit ??
-                                                        "-"}
-                                                </span>
+                                            <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-300">
+                                                {item.unit?.nama_unit ?? "-"}
                                             </td>
 
                                             <td className="px-5 py-4">
                                                 <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                                                    {jenisLabel(
+                                                    {label(
+                                                        JENIS,
                                                         item.jenis_hunian,
                                                     )}
                                                 </span>
@@ -813,21 +823,21 @@ export default function HunianIndex() {
 
                                             <td className="px-5 py-4">
                                                 <span
-                                                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${kondisiClass(
-                                                        item.kondisi,
-                                                    )}`}
+                                                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${kondisiClass(item.kondisi)}`}
                                                 >
-                                                    {kondisiLabel(item.kondisi)}
+                                                    {label(
+                                                        KONDISI,
+                                                        item.kondisi,
+                                                    )}
                                                 </span>
                                             </td>
 
                                             <td className="px-5 py-4">
                                                 <span
-                                                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${statusClass(
-                                                        item.status_operasional,
-                                                    )}`}
+                                                    className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${statusClass(item.status_operasional)}`}
                                                 >
-                                                    {statusLabel(
+                                                    {label(
+                                                        STATUS,
                                                         item.status_operasional,
                                                     )}
                                                 </span>
@@ -844,24 +854,32 @@ export default function HunianIndex() {
                                                         <Eye className="h-4 w-4" />
                                                     </ActionButton>
 
-                                                    <ActionButton
-                                                        title="Edit"
-                                                        onClick={() =>
-                                                            openEdit(item)
-                                                        }
-                                                    >
-                                                        <Edit3 className="h-4 w-4" />
-                                                    </ActionButton>
+                                                    {canManage && (
+                                                        <>
+                                                            <ActionButton
+                                                                title="Edit"
+                                                                onClick={() =>
+                                                                    openEdit(
+                                                                        item,
+                                                                    )
+                                                                }
+                                                            >
+                                                                <Edit3 className="h-4 w-4" />
+                                                            </ActionButton>
 
-                                                    <ActionButton
-                                                        title="Hapus"
-                                                        danger
-                                                        onClick={() =>
-                                                            openDelete(item)
-                                                        }
-                                                    >
-                                                        <Trash2 className="h-4 w-4" />
-                                                    </ActionButton>
+                                                            <ActionButton
+                                                                title="Hapus"
+                                                                danger
+                                                                onClick={() =>
+                                                                    openDelete(
+                                                                        item,
+                                                                    )
+                                                                }
+                                                            >
+                                                                <Trash2 className="h-4 w-4" />
+                                                            </ActionButton>
+                                                        </>
+                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
@@ -894,7 +912,6 @@ export default function HunianIndex() {
                             <div className="flex items-center gap-1">
                                 {hunian.links.map((link, index) => {
                                     const isPrevious = index === 0;
-
                                     const isNext =
                                         index === hunian.links.length - 1;
 
@@ -919,11 +936,7 @@ export default function HunianIndex() {
                                                 link.active
                                                     ? "bg-[#0f2f5f] text-white"
                                                     : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
-                                            } ${
-                                                !link.url
-                                                    ? "cursor-not-allowed opacity-40"
-                                                    : ""
-                                            }`}
+                                            } ${!link.url ? "cursor-not-allowed opacity-40" : ""}`}
                                         >
                                             {isPrevious ? (
                                                 <ChevronLeft className="h-4 w-4" />
@@ -945,12 +958,13 @@ export default function HunianIndex() {
                 </div>
             </div>
 
-            {/* =================================================================
-                MODAL CREATE / EDIT
-            ================================================================= */}
+            {/* MODAL CREATE / EDIT */}
 
             <Modal
-                open={modal?.type === "create" || modal?.type === "edit"}
+                open={
+                    canManage &&
+                    (modal?.type === "create" || modal?.type === "edit")
+                }
                 title={
                     modal?.type === "edit"
                         ? "Edit Data Hunian"
@@ -964,29 +978,41 @@ export default function HunianIndex() {
                 onClose={closeModal}
             >
                 <form onSubmit={submit} className="space-y-5">
-                    {/* ROW 1 */}
-
                     <div className="grid gap-4 md:grid-cols-2">
                         <Field
                             label="Unit"
                             required
                             error={form.errors.unit_id}
                         >
-                            <select
-                                value={form.data.unit_id}
-                                onChange={(event) =>
-                                    form.setData("unit_id", event.target.value)
-                                }
-                                className={selectBase}
-                            >
-                                <option value="">Pilih Unit</option>
+                            {lockedUnitId ? (
+                                <div className="flex h-[42px] items-center justify-between rounded-xl border border-slate-200 bg-slate-100 px-3 dark:border-slate-700 dark:bg-slate-800">
+                                    <span className="truncate text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                        {unitName(lockedUnitId) ||
+                                            "Satuan Anda"}
+                                    </span>
 
-                                {units.map((unit) => (
-                                    <option key={unit.id} value={unit.id}>
-                                        {unit.nama_unit}
-                                    </option>
-                                ))}
-                            </select>
+                                    <Lock className="h-4 w-4 shrink-0 text-slate-400" />
+                                </div>
+                            ) : (
+                                <select
+                                    value={form.data.unit_id}
+                                    onChange={(event) =>
+                                        form.setData(
+                                            "unit_id",
+                                            event.target.value,
+                                        )
+                                    }
+                                    className={selectBase}
+                                >
+                                    <option value="">Pilih Unit</option>
+
+                                    {units.map((unit) => (
+                                        <option key={unit.id} value={unit.id}>
+                                            {unit.nama_unit}
+                                        </option>
+                                    ))}
+                                </select>
+                            )}
                         </Field>
 
                         <Field label="Kode Hunian">
@@ -1004,8 +1030,6 @@ export default function HunianIndex() {
                         </Field>
                     </div>
 
-                    {/* ROW 2 */}
-
                     <div className="grid gap-4 md:grid-cols-2">
                         <Field
                             label="Jenis Hunian"
@@ -1022,11 +1046,7 @@ export default function HunianIndex() {
                                 }
                                 className={selectBase}
                             >
-                                <option value="rumah_dinas">Rumah Dinas</option>
-
-                                <option value="mes">Mes / Asrama</option>
-
-                                <option value="apartemen">Apartemen</option>
+                                <Options map={JENIS} />
                             </select>
                         </Field>
 
@@ -1050,8 +1070,6 @@ export default function HunianIndex() {
                         </Field>
                     </div>
 
-                    {/* ALAMAT */}
-
                     <Field label="Alamat" required error={form.errors.alamat}>
                         <textarea
                             rows={3}
@@ -1063,8 +1081,6 @@ export default function HunianIndex() {
                             className={textareaBase}
                         />
                     </Field>
-
-                    {/* ROW 3 */}
 
                     <div className="grid gap-4 md:grid-cols-2">
                         <Field label="Blok" error={form.errors.blok}>
@@ -1091,8 +1107,6 @@ export default function HunianIndex() {
                             />
                         </Field>
                     </div>
-
-                    {/* ROW 4 */}
 
                     <div className="grid gap-4 md:grid-cols-2">
                         <Field label="Lantai" error={form.errors.lantai}>
@@ -1127,8 +1141,6 @@ export default function HunianIndex() {
                             />
                         </Field>
                     </div>
-
-                    {/* ROW 5 */}
 
                     <div className="grid gap-4 md:grid-cols-2">
                         <Field
@@ -1172,8 +1184,6 @@ export default function HunianIndex() {
                         </Field>
                     </div>
 
-                    {/* ROW 6 */}
-
                     <div className="grid gap-4 md:grid-cols-2">
                         <Field
                             label="Kondisi"
@@ -1187,13 +1197,7 @@ export default function HunianIndex() {
                                 }
                                 className={selectBase}
                             >
-                                <option value="baik">Baik</option>
-
-                                <option value="rusak_ringan">
-                                    Rusak Ringan
-                                </option>
-
-                                <option value="rusak_berat">Rusak Berat</option>
+                                <Options map={KONDISI} />
                             </select>
                         </Field>
 
@@ -1212,18 +1216,10 @@ export default function HunianIndex() {
                                 }
                                 className={selectBase}
                             >
-                                <option value="tersedia">Tersedia</option>
-
-                                <option value="dihuni">Dihuni</option>
-
-                                <option value="perbaikan">Perbaikan</option>
-
-                                <option value="tidak_layak">Tidak Layak</option>
+                                <Options map={STATUS} />
                             </select>
                         </Field>
                     </div>
-
-                    {/* KETERANGAN */}
 
                     <Field label="Keterangan" error={form.errors.keterangan}>
                         <textarea
@@ -1236,8 +1232,6 @@ export default function HunianIndex() {
                             className={textareaBase}
                         />
                     </Field>
-
-                    {/* FOOTER */}
 
                     <div className="flex justify-end gap-2 border-t border-slate-200 pt-5 dark:border-slate-700">
                         <button
@@ -1266,9 +1260,7 @@ export default function HunianIndex() {
                 </form>
             </Modal>
 
-            {/* =================================================================
-                MODAL DETAIL
-            ================================================================= */}
+            {/* MODAL DETAIL */}
 
             <Modal
                 open={modal?.type === "show"}
@@ -1302,24 +1294,20 @@ export default function HunianIndex() {
                         <div className="grid gap-4 sm:grid-cols-2">
                             <DetailItem
                                 label="Jenis Hunian"
-                                value={jenisLabel(modal.item.jenis_hunian)}
+                                value={label(JENIS, modal.item.jenis_hunian)}
                             />
-
                             <DetailItem
                                 label="Unit"
                                 value={modal.item.unit?.nama_unit ?? "-"}
                             />
-
                             <DetailItem
                                 label="Blok"
                                 value={modal.item.blok ?? "-"}
                             />
-
                             <DetailItem
                                 label="Nomor"
                                 value={modal.item.nomor ?? "-"}
                             />
-
                             <DetailItem
                                 label="Lantai"
                                 value={
@@ -1328,12 +1316,10 @@ export default function HunianIndex() {
                                         : "-"
                                 }
                             />
-
                             <DetailItem
                                 label="Jumlah Kamar"
                                 value={`${modal.item.jumlah_kamar} kamar`}
                             />
-
                             <DetailItem
                                 label="Luas Bangunan"
                                 value={
@@ -1342,7 +1328,6 @@ export default function HunianIndex() {
                                         : "-"
                                 }
                             />
-
                             <DetailItem
                                 label="Luas Tanah"
                                 value={
@@ -1351,15 +1336,14 @@ export default function HunianIndex() {
                                         : "-"
                                 }
                             />
-
                             <DetailItem
                                 label="Kondisi"
-                                value={kondisiLabel(modal.item.kondisi)}
+                                value={label(KONDISI, modal.item.kondisi)}
                             />
-
                             <DetailItem
                                 label="Status Operasional"
-                                value={statusLabel(
+                                value={label(
+                                    STATUS,
                                     modal.item.status_operasional,
                                 )}
                             />
@@ -1392,12 +1376,10 @@ export default function HunianIndex() {
                 )}
             </Modal>
 
-            {/* =================================================================
-                MODAL DELETE
-            ================================================================= */}
+            {/* MODAL DELETE */}
 
             <Modal
-                open={modal?.type === "delete"}
+                open={canManage && modal?.type === "delete"}
                 title="Hapus Data Hunian"
                 description="Tindakan ini akan menghapus data hunian."
                 onClose={closeModal}
@@ -1448,88 +1430,5 @@ export default function HunianIndex() {
                 )}
             </Modal>
         </>
-    );
-}
-
-/* ============================================================================
-   STAT CARD
-============================================================================ */
-
-function StatCard({
-    title,
-    value,
-    icon,
-}: {
-    title: string;
-    value: number;
-    icon: ReactNode;
-}) {
-    return (
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
-            <div className="flex items-center justify-between">
-                <div>
-                    <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
-                        {title}
-                    </p>
-
-                    <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
-                        {value}
-                    </p>
-                </div>
-
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#0f2f5f]/10 text-[#0f2f5f] dark:bg-[#d4af37]/10 dark:text-[#d4af37]">
-                    {icon}
-                </div>
-            </div>
-        </div>
-    );
-}
-
-/* ============================================================================
-   ACTION BUTTON
-============================================================================ */
-
-function ActionButton({
-    children,
-    title,
-    onClick,
-    danger = false,
-}: {
-    children: ReactNode;
-    title: string;
-    onClick: () => void;
-    danger?: boolean;
-}) {
-    return (
-        <button
-            type="button"
-            title={title}
-            onClick={onClick}
-            className={`rounded-lg p-2 transition ${
-                danger
-                    ? "text-red-500 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10"
-                    : "text-slate-500 hover:bg-[#0f2f5f]/10 hover:text-[#0f2f5f] dark:text-slate-400 dark:hover:bg-white/5 dark:hover:text-white"
-            }`}
-        >
-            {children}
-        </button>
-    );
-}
-
-/* ============================================================================
-   DETAIL ITEM
-============================================================================ */
-
-function DetailItem({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                {label}
-            </p>
-
-            <p className="mt-1 text-sm font-medium text-slate-800 dark:text-slate-200">
-                {value}
-            </p>
-        </div>
     );
 }

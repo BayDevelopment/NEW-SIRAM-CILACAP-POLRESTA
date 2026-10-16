@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Penghunian extends Model
@@ -79,6 +80,16 @@ class Penghunian extends Model
             fn() => $this->dokumen_perjanjian
                 ? asset('storage/' . $this->dokumen_perjanjian)
                 : null
+        );
+    }
+    /**
+     * Dokumen yang berkaitan dengan penghunian ini.
+     */
+    public function dokumen(): HasMany
+    {
+        return $this->hasMany(
+            DokumenPenghunian::class,
+            'penghunian_id'
         );
     }
 }

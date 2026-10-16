@@ -32,13 +32,12 @@ class DokumenPenghunian extends Model
         return $this->belongsTo(Penghunian::class, 'penghunian_id');
     }
 
+
     public function getFileUrlAttribute(): string
     {
-        /** @var \Illuminate\Filesystem\FilesystemAdapter $disk */
-        $disk = Storage::disk('public');
-
-        return $disk->url($this->file_path);
+        return Storage::url($this->file_path);
     }
+
 
     public function getUkuranFileAttribute(): string
     {

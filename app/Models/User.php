@@ -7,6 +7,8 @@ use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Carbon;
@@ -69,5 +71,36 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
             'two_factor_confirmed_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+    /**
+     * Satuan yang menjadi cakupan pengguna.
+     */
+    public function unit(): BelongsTo
+    {
+        return $this->belongsTo(Unit::class, 'unit_id');
+    }
+
+    /**
+     * Anggota yang terhubung ke akun pengguna.
+     */
+    public function anggota(): HasMany
+    {
+        return $this->hasMany(Anggota::class, 'user_id');
+    }
+
+    /**
+     * Memeriksa role Superadmin.
+     */
+    public function isSuperadmin(): bool
+    {
+        return $this->role === 'superadmin';
+    }
+
+    /**
+     * Memeriksa role Admin Polsek.
+     */
+    public function isAdminPolsek(): bool
+    {
+        return $this->role === 'admin_polsek';
     }
 }

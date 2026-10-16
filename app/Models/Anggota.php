@@ -32,14 +32,16 @@ class Anggota extends Model
     protected function casts(): array
     {
         return [
+            'user_id' => 'integer',
+            'unit_id' => 'integer',
             'tanggal_lahir' => 'date:Y-m-d',
             'is_active' => 'boolean',
         ];
     }
 
     /* ------------------------------------------------------------------
-     | RELATIONS
-     * ---------------------------------------------------------------- */
+    | RELATIONS
+    |-------------------------------------------------------------------*/
 
     /**
      * Akun pengguna yang terhubung dengan anggota.
