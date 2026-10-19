@@ -17,17 +17,15 @@ class DashboardController extends Controller
     public function __invoke(Request $request): Response
     {
         $user = $request->user();
-
-        $isSuperadmin = $user->role === 'superadmin';
+        $isSuperadmin = $user->isSuperadmin();
 
         // Gunakan tanggal kalender, bukan waktu saat ini.
         $hariIni = Carbon::today();
-        $batas30Hari = $hariIni->copy()->addDays(30);
         $tanggalHariIni = $hariIni->toDateString();
-        $tanggalBatas30Hari = $batas30Hari->toDateString();
+        $tanggalBatas30Hari = $hariIni->copy()->addDays(30)->toDateString();
 
-        // Batasi data berdasarkan unit pengguna.
-        $scopeUnit = function (Builder $query) use ($user, $isSuperadmin) {
+        // Batasi data berdasarkan unit pengguna (Polsek hanya satuannya sendiri).
+        $scopeUnit = function (Builder $query) use ($user, $isSuperadmin): Builder {
             if (! $isSuperadmin) {
                 $query->where('unit_id', $user->unit_id);
             }
@@ -35,18 +33,16 @@ class DashboardController extends Controller
             return $query;
         };
 
-        $hunianQuery = Hunian::query();
-        $scopeUnit($hunianQuery);
+        $hunianQuery = $scopeUnit(Hunian::query());
+        $anggotaQuery = $scopeUnit(Anggota::query());
+        $unitQuery = Unit::query();
 
-        $anggotaQuery = Anggota::query();
-        $scopeUnit($anggotaQuery);
+        if (! $isSuperadmin) {
+            $unitQuery->whereKey($user->unit_id);
+        }
 
-        // Hanya penghunian berstatus aktif yang ditampilkan.
+        // Hanya penghunian berstatus aktif.
         $penghunianQuery = Penghunian::query()
-            ->with([
-                'anggota:id,nama_lengkap,nrp,pangkat,jabatan,unit_id',
-                'hunian:id,unit_id,kode_hunian,nama_hunian,jenis_hunian,alamat',
-            ])
             ->where('status', Penghunian::STATUS_AKTIF);
 
         if (! $isSuperadmin) {
@@ -57,11 +53,15 @@ class DashboardController extends Controller
 
         // Daftar penghunian aktif terbaru.
         $penghunianAktif = (clone $penghunianQuery)
+            ->with([
+                'anggota:id,nama_lengkap,nrp,pangkat,jabatan,unit_id',
+                'hunian:id,unit_id,kode_hunian,nama_hunian,jenis_hunian,alamat',
+            ])
             ->latest('tanggal_mulai')
+            ->latest('id')
             ->limit(8)
             ->get()
             ->map(function (Penghunian $penghunian) use ($hariIni) {
-                // Normalisasi ke tanggal kalender agar tidak terpengaruh jam.
                 $tanggalMulai = $penghunian->tanggal_mulai
                     ? Carbon::parse($penghunian->tanggal_mulai)->startOfDay()
                     : null;
@@ -78,7 +78,6 @@ class DashboardController extends Controller
                 return [
                     'id' => $penghunian->id,
                     'status' => $penghunian->status,
-
                     'tanggal_mulai' => $tanggalMulai?->toDateString(),
                     'tanggal_selesai' => $tanggalSelesai?->toDateString(),
                     'sisa_hari' => $sisaHari,
@@ -101,72 +100,55 @@ class DashboardController extends Controller
                 ];
             });
 
-        // Statistik hunian.
-        $totalHunian = (clone $hunianQuery)->count();
-
-        $hunianTersedia = (clone $hunianQuery)
-            ->where('status_operasional', 'tersedia')
-            ->count();
-
-        $hunianDihuni = (clone $hunianQuery)
-            ->where('status_operasional', 'dihuni')
-            ->count();
-
-        $hunianPerbaikan = (clone $hunianQuery)
-            ->where('status_operasional', 'perbaikan')
-            ->count();
-
-        // Statistik penghunian dan anggota.
-        $totalPenghunianAktif = (clone $penghunianQuery)->count();
-
-        $totalAnggotaAktif = (clone $anggotaQuery)
-            ->where('is_active', true)
-            ->count();
-
-        // Berakhir hari ini sampai dengan 30 hari ke depan.
-        $penghunianAkanBerakhir = (clone $penghunianQuery)
-            ->whereNotNull('tanggal_selesai')
-            ->whereDate('tanggal_selesai', '>=', $tanggalHariIni)
-            ->whereDate('tanggal_selesai', '<=', $tanggalBatas30Hari)
-            ->count();
-
-        // Tanggal berakhir sudah lewat, tetapi status masih aktif.
-        $penghunianLewatTanggal = (clone $penghunianQuery)
-            ->whereNotNull('tanggal_selesai')
-            ->whereDate('tanggal_selesai', '<', $tanggalHariIni)
-            ->count();
-
-        // Statistik unit.
-        $unitQuery = Unit::query();
-
-        if (! $isSuperadmin) {
-            $unitQuery->whereKey($user->unit_id);
-        }
+        // Unit pengguna beserta induknya (Polresta) untuk label di header.
+        $unitPengguna = $user->unit;
+        $unitPengguna?->loadMissing('parent:id,kode_unit,nama_unit,tipe_unit');
 
         return Inertia::render('dashboard', [
             'userRole' => $user->role,
             'unitPengguna' => $user->unit_id,
 
-            'unit' => $user->unit ? [
-                'id' => $user->unit->id,
-                'kode_unit' => $user->unit->kode_unit,
-                'nama_unit' => $user->unit->nama_unit,
-                'tipe_unit' => $user->unit->tipe_unit,
+            'unit' => $unitPengguna ? [
+                'id' => $unitPengguna->id,
+                'kode_unit' => $unitPengguna->kode_unit,
+                'nama_unit' => $unitPengguna->nama_unit,
+                'tipe_unit' => $unitPengguna->tipe_unit,
+                'parent' => $unitPengguna->parent ? [
+                    'id' => $unitPengguna->parent->id,
+                    'kode_unit' => $unitPengguna->parent->kode_unit,
+                    'nama_unit' => $unitPengguna->parent->nama_unit,
+                    'tipe_unit' => $unitPengguna->parent->tipe_unit,
+                ] : null,
             ] : null,
 
             'stats' => [
-                'total_unit' => $isSuperadmin
-                    ? Unit::count()
-                    : (clone $unitQuery)->count(),
+                'total_unit' => (clone $unitQuery)->count(),
 
-                'total_hunian' => $totalHunian,
-                'hunian_tersedia' => $hunianTersedia,
-                'hunian_dihuni' => $hunianDihuni,
-                'hunian_perbaikan' => $hunianPerbaikan,
-                'total_anggota_aktif' => $totalAnggotaAktif,
-                'total_penghunian_aktif' => $totalPenghunianAktif,
-                'penghunian_akan_berakhir' => $penghunianAkanBerakhir,
-                'penghunian_lewat_tanggal' => $penghunianLewatTanggal,
+                'total_hunian' => (clone $hunianQuery)->count(),
+                'hunian_tersedia' => (clone $hunianQuery)
+                    ->where('status_operasional', 'tersedia')->count(),
+                'hunian_dihuni' => (clone $hunianQuery)
+                    ->where('status_operasional', 'dihuni')->count(),
+                'hunian_perbaikan' => (clone $hunianQuery)
+                    ->where('status_operasional', 'perbaikan')->count(),
+
+                'total_anggota_aktif' => (clone $anggotaQuery)
+                    ->where('is_active', true)->count(),
+
+                'total_penghunian_aktif' => (clone $penghunianQuery)->count(),
+
+                // Berakhir hari ini sampai 30 hari ke depan.
+                'penghunian_akan_berakhir' => (clone $penghunianQuery)
+                    ->whereNotNull('tanggal_selesai')
+                    ->whereDate('tanggal_selesai', '>=', $tanggalHariIni)
+                    ->whereDate('tanggal_selesai', '<=', $tanggalBatas30Hari)
+                    ->count(),
+
+                // Sudah lewat tanggal selesai, tetapi status masih aktif.
+                'penghunian_lewat_tanggal' => (clone $penghunianQuery)
+                    ->whereNotNull('tanggal_selesai')
+                    ->whereDate('tanggal_selesai', '<', $tanggalHariIni)
+                    ->count(),
             ],
 
             'penghunianAktif' => $penghunianAktif,

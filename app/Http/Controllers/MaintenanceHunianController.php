@@ -346,6 +346,11 @@ class MaintenanceHunianController extends Controller
                 'required',
                 'integer',
                 'exists:hunian,id',
+                function (string $attribute, mixed $value, \Closure $fail): void {
+                    if (! \App\Models\Hunian::query()->find($value)) {
+                        $fail('Hunian tidak ditemukan atau di luar kewenangan satuan Anda.');
+                    }
+                },
             ],
 
             'jenis_kerusakan' => [

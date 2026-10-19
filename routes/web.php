@@ -10,7 +10,23 @@ use App\Http\Controllers\RiwayatPindahHunianController;
 use App\Http\Controllers\UnitController;
 use Illuminate\Support\Facades\Route;
 
+/*
+|--------------------------------------------------------------------------
+| Halaman Utama
+|--------------------------------------------------------------------------
+*/
+
 Route::redirect('/', '/login')->name('home');
+
+/*
+|--------------------------------------------------------------------------
+| Routes Pengguna Terautentikasi
+|--------------------------------------------------------------------------
+|
+| Semua route berikut memerlukan autentikasi dan email terverifikasi.
+| Hak akses selanjutnya diatur berdasarkan role pengguna.
+|
+*/
 
 Route::middleware(['auth', 'verified'])->group(function () {
 
@@ -18,8 +34,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     |--------------------------------------------------------------------------
     | Dashboard
     |--------------------------------------------------------------------------
-    | Superadmin dan Anggota.
+    | Superadmin dan anggota.
     */
+
     Route::middleware('role:superadmin,anggota')
         ->get('/dashboard', DashboardController::class)
         ->name('dashboard');
@@ -28,8 +45,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     |--------------------------------------------------------------------------
     | Data Unit / Satuan
     |--------------------------------------------------------------------------
-    | Khusus Superadmin.
+    | Khusus superadmin.
     */
+
     Route::middleware('role:superadmin')->group(function () {
         Route::resource('unit', UnitController::class)
             ->only(['index', 'store', 'update', 'destroy']);
@@ -39,20 +57,31 @@ Route::middleware(['auth', 'verified'])->group(function () {
     |--------------------------------------------------------------------------
     | Data Hunian
     |--------------------------------------------------------------------------
-    | Superadmin dan Anggota.
-    | Pembatasan data berdasarkan unit wajib dilakukan di controller.
+    | Index:
+    | - Superadmin dapat melihat semua unit.
+    | - Anggota hanya boleh melihat unitnya sendiri melalui scope/controller.
+    |
+    | Mutasi:
+    | - Store, update, destroy hanya superadmin.
     */
+
     Route::middleware('role:superadmin,anggota')->group(function () {
+        Route::get('hunian', [HunianController::class, 'index'])
+            ->name('hunian.index');
+    });
+
+    Route::middleware('role:superadmin')->group(function () {
         Route::resource('hunian', HunianController::class)
-            ->except(['create', 'edit', 'show']);
+            ->only(['store', 'update', 'destroy']);
     });
 
     /*
     |--------------------------------------------------------------------------
     | Data Anggota
     |--------------------------------------------------------------------------
-    | Khusus Superadmin.
+    | Seluruh operasi Data Anggota khusus superadmin.
     */
+
     Route::middleware('role:superadmin')->group(function () {
         Route::resource('anggota', AnggotaController::class)
             ->except(['create', 'show', 'edit']);
@@ -62,19 +91,37 @@ Route::middleware(['auth', 'verified'])->group(function () {
     |--------------------------------------------------------------------------
     | Data Penghunian
     |--------------------------------------------------------------------------
-    | Superadmin dan Anggota.
+    | Superadmin dan anggota.
+    |
+    | Batasan data per unit tetap wajib diterapkan oleh global scope,
+    | validasi, dan PenghunianController.
     */
+
     Route::middleware('role:superadmin,anggota')->group(function () {
+        /*
+         * Endpoint pencarian anggota untuk dropdown Penghunian.
+         */
         Route::get(
             'penghunian/options/anggota',
             [PenghunianController::class, 'optionsAnggota']
         )->name('penghunian.options.anggota');
 
+        /*
+         * Endpoint pencarian hunian untuk dropdown Penghunian.
+         */
         Route::get(
             'penghunian/options/hunian',
             [PenghunianController::class, 'optionsHunian']
         )->name('penghunian.options.hunian');
 
+        /*
+         * Route yang dihasilkan:
+         * GET     /penghunian
+         * POST    /penghunian
+         * PUT     /penghunian/{penghunian}
+         * PATCH   /penghunian/{penghunian}
+         * DELETE  /penghunian/{penghunian}
+         */
         Route::resource('penghunian', PenghunianController::class)
             ->except(['create', 'show', 'edit']);
     });
@@ -83,8 +130,9 @@ Route::middleware(['auth', 'verified'])->group(function () {
     |--------------------------------------------------------------------------
     | Riwayat Pindah Hunian
     |--------------------------------------------------------------------------
-    | Khusus Superadmin.
+    | Khusus superadmin.
     */
+
     Route::middleware('role:superadmin')->group(function () {
         Route::get(
             'riwayat-pindah/options/penghunian',
@@ -106,19 +154,27 @@ Route::middleware(['auth', 'verified'])->group(function () {
     |--------------------------------------------------------------------------
     | Data Pemeliharaan
     |--------------------------------------------------------------------------
-    | Superadmin dan Anggota.
+    | Superadmin dan anggota.
+    |
+    | Anggota hanya boleh mengakses data pemeliharaan yang berada
+    | dalam kewenangan unitnya. Pastikan controller dan global scope
+    | memeriksa akses untuk index, store, update, dan destroy.
     */
+
     Route::middleware('role:superadmin,anggota')->group(function () {
-        Route::resource('pemeliharaan', MaintenanceHunianController::class)
-            ->except(['create', 'show', 'edit']);
+        Route::resource(
+            'pemeliharaan',
+            MaintenanceHunianController::class
+        )->except(['create', 'show', 'edit']);
     });
 
     /*
     |--------------------------------------------------------------------------
     | Dokumen Penghunian
     |--------------------------------------------------------------------------
-    | Khusus Superadmin.
+    | Khusus superadmin.
     */
+
     Route::middleware('role:superadmin')->group(function () {
         Route::resource('dokumen', DokumenPenghunianController::class)
             ->except(['create', 'show', 'edit']);
@@ -129,5 +185,11 @@ Route::middleware(['auth', 'verified'])->group(function () {
         )->name('dokumen.download');
     });
 });
+
+/*
+|--------------------------------------------------------------------------
+| Pengaturan Akun
+|--------------------------------------------------------------------------
+*/
 
 require __DIR__ . '/settings.php';

@@ -72,6 +72,7 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
             'password' => 'hashed',
         ];
     }
+
     /**
      * Satuan yang menjadi cakupan pengguna.
      */
@@ -89,7 +90,7 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     }
 
     /**
-     * Memeriksa role Superadmin.
+     * Memeriksa role Superadmin (Polresta).
      */
     public function isSuperadmin(): bool
     {
@@ -97,10 +98,10 @@ class User extends Authenticatable implements MustVerifyEmail, PasskeyUser
     }
 
     /**
-     * Memeriksa role Admin Polsek.
+     * Memeriksa role Anggota (Polsek).
      */
-    public function isAdminPolsek(): bool
+    public function isAnggota(): bool
     {
-        return $this->role === 'admin_polsek';
+        return $this->role === 'anggota';
     }
 }

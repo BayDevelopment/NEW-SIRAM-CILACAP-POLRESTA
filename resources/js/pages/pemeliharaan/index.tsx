@@ -72,6 +72,13 @@ type StatusPemeliharaan = "dilaporkan" | "diproses" | "selesai" | "ditolak";
 type JenisKerusakan = "ringan" | "berat";
 type ModalType = "form" | "detail" | "delete" | null;
 
+interface AuthUser {
+    id: number;
+    name?: string;
+    role?: string;
+    unit_id?: number | null;
+}
+
 interface HunianOption {
     id: number;
     kode_hunian: string;
@@ -124,15 +131,22 @@ interface MaintenanceStats {
 
 interface PageProps {
     [key: string]: unknown;
+
+    auth?: {
+        user?: AuthUser | null;
+    } | null;
+
     pemeliharaan: Paginated<Maintenance>;
     hunianOptions: HunianOption[];
     stats: MaintenanceStats;
+
     filters?: {
         search?: string;
         status?: string;
         jenis_kerusakan?: string;
         hunian_id?: string | number;
     };
+
     flash?: {
         success?: string;
         error?: string;
@@ -331,6 +345,7 @@ function Modal({
                         <h2 className="text-lg font-bold text-slate-900 dark:text-white">
                             {title}
                         </h2>
+
                         {description && (
                             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                                 {description}
@@ -379,10 +394,12 @@ function StatCard({
                     <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
                         {label}
                     </p>
+
                     <p className="mt-2 text-3xl font-bold tracking-tight text-slate-900 dark:text-white">
                         {Number(value ?? 0).toLocaleString("id-ID")}
                     </p>
                 </div>
+
                 <div className={`rounded-xl p-3 ${bg} ${color}`}>
                     <Icon size={23} />
                 </div>
@@ -469,12 +486,22 @@ function Pagination<T>({ data }: { data: Paginated<T> }) {
 
 export default function Index() {
     const {
+        auth,
         pemeliharaan,
         hunianOptions = [],
         stats,
         filters = {},
         flash,
     } = usePage<PageProps>().props;
+
+    /**
+     * Hak akses frontend:
+     * - superadmin: melihat dan mengelola data.
+     * - anggota: hanya melihat data dan detail.
+     *
+     * Validasi backend tetap wajib diterapkan di controller.
+     */
+    const isSuperadmin = auth?.user?.role === "superadmin";
 
     const [modal, setModal] = useState<ModalType>(null);
     const [selected, setSelected] = useState<Maintenance | null>(null);
@@ -534,6 +561,11 @@ export default function Index() {
     };
 
     const openCreate = () => {
+        if (!isSuperadmin) {
+            toast.error("Anda tidak memiliki izin untuk menambah data.");
+            return;
+        }
+
         setSelected(null);
         form.clearErrors();
         form.setData(createEmptyForm());
@@ -541,6 +573,11 @@ export default function Index() {
     };
 
     const openEdit = (item: Maintenance) => {
+        if (!isSuperadmin) {
+            toast.error("Anda tidak memiliki izin untuk mengedit data.");
+            return;
+        }
+
         const data: FormData = {
             hunian_id: String(item.hunian_id),
             jenis_kerusakan: item.jenis_kerusakan,
@@ -576,9 +613,14 @@ export default function Index() {
     const submitForm = (event: FormEvent<HTMLFormElement>) => {
         event.preventDefault();
 
-        if (form.processing) return;
+        if (!isSuperadmin) {
+            toast.error("Anda tidak memiliki izin untuk menyimpan data.");
+            setModal(null);
+            setSelected(null);
+            return;
+        }
 
-        const isEditing = selected !== null;
+        if (form.processing) return;
 
         const options = {
             preserveScroll: true,
@@ -601,11 +643,23 @@ export default function Index() {
     };
 
     const openDelete = (item: Maintenance) => {
+        if (!isSuperadmin) {
+            toast.error("Anda tidak memiliki izin untuk menghapus data.");
+            return;
+        }
+
         setSelected(item);
         setModal("delete");
     };
 
     const deleteItem = () => {
+        if (!isSuperadmin) {
+            toast.error("Anda tidak memiliki izin untuk menghapus data.");
+            setModal(null);
+            setSelected(null);
+            return;
+        }
+
         if (!selected || deleting) return;
 
         router.delete(`/pemeliharaan/${selected.id}`, {
@@ -697,14 +751,17 @@ export default function Index() {
                             </p>
                         </div>
 
-                        <button
-                            type="button"
-                            onClick={openCreate}
-                            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-[#d4af37] px-5 py-3 text-sm font-bold text-[#0f2f5f] shadow-md transition hover:bg-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-200/40"
-                        >
-                            <Plus size={18} />
-                            Tambah Pemeliharaan
-                        </button>
+                        {/* Tambah hanya untuk superadmin */}
+                        {isSuperadmin && (
+                            <button
+                                type="button"
+                                onClick={openCreate}
+                                className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-[#d4af37] px-5 py-3 text-sm font-bold text-[#0f2f5f] shadow-md transition hover:bg-amber-300 focus:outline-none focus:ring-4 focus:ring-amber-200/40"
+                            >
+                                <Plus size={18} />
+                                Tambah Pemeliharaan
+                            </button>
+                        )}
                     </div>
                 </header>
 
@@ -941,6 +998,7 @@ export default function Index() {
 
                                             <td className="px-5 py-4">
                                                 <div className="flex items-center justify-end gap-1.5">
+                                                    {/* Detail tersedia untuk semua role */}
                                                     <button
                                                         type="button"
                                                         title="Lihat detail"
@@ -953,29 +1011,42 @@ export default function Index() {
                                                         <Eye size={17} />
                                                     </button>
 
-                                                    <button
-                                                        type="button"
-                                                        title="Edit data"
-                                                        aria-label="Edit data"
-                                                        onClick={() =>
-                                                            openEdit(item)
-                                                        }
-                                                        className="rounded-lg p-2 text-amber-600 transition hover:bg-amber-50 dark:hover:bg-amber-950/40"
-                                                    >
-                                                        <Pencil size={17} />
-                                                    </button>
+                                                    {/* Edit dan hapus hanya untuk superadmin */}
+                                                    {isSuperadmin && (
+                                                        <>
+                                                            <button
+                                                                type="button"
+                                                                title="Edit data"
+                                                                aria-label="Edit data"
+                                                                onClick={() =>
+                                                                    openEdit(
+                                                                        item,
+                                                                    )
+                                                                }
+                                                                className="rounded-lg p-2 text-amber-600 transition hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                                                            >
+                                                                <Pencil
+                                                                    size={17}
+                                                                />
+                                                            </button>
 
-                                                    <button
-                                                        type="button"
-                                                        title="Hapus data"
-                                                        aria-label="Hapus data"
-                                                        onClick={() =>
-                                                            openDelete(item)
-                                                        }
-                                                        className="rounded-lg p-2 text-rose-600 transition hover:bg-rose-50 dark:hover:bg-rose-950/40"
-                                                    >
-                                                        <Trash2 size={17} />
-                                                    </button>
+                                                            <button
+                                                                type="button"
+                                                                title="Hapus data"
+                                                                aria-label="Hapus data"
+                                                                onClick={() =>
+                                                                    openDelete(
+                                                                        item,
+                                                                    )
+                                                                }
+                                                                className="rounded-lg p-2 text-rose-600 transition hover:bg-rose-50 dark:hover:bg-rose-950/40"
+                                                            >
+                                                                <Trash2
+                                                                    size={17}
+                                                                />
+                                                            </button>
+                                                        </>
+                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
@@ -1000,19 +1071,21 @@ export default function Index() {
                                                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                                                     {hasActiveFilter
                                                         ? "Coba ubah filter atau kata kunci pencarian."
-                                                        : "Tambahkan laporan pemeliharaan untuk mulai mencatat perbaikan hunian."}
+                                                        : "Belum ada laporan pemeliharaan yang dapat ditampilkan."}
                                                 </p>
 
-                                                {!hasActiveFilter && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={openCreate}
-                                                        className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#0f2f5f] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#163f79]"
-                                                    >
-                                                        <Plus size={16} />
-                                                        Tambah Data
-                                                    </button>
-                                                )}
+                                                {/* Tambah data kosong hanya untuk superadmin */}
+                                                {!hasActiveFilter &&
+                                                    isSuperadmin && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={openCreate}
+                                                            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-[#0f2f5f] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#163f79]"
+                                                        >
+                                                            <Plus size={16} />
+                                                            Tambah Data
+                                                        </button>
+                                                    )}
                                             </div>
                                         </td>
                                     </tr>
@@ -1027,9 +1100,10 @@ export default function Index() {
 
             {/* =================================================
                 MODAL CREATE / EDIT
+                HANYA SUPERADMIN
             ================================================= */}
 
-            {modal === "form" && (
+            {isSuperadmin && modal === "form" && (
                 <Modal
                     title={
                         selected ? "Edit Pemeliharaan" : "Tambah Pemeliharaan"
@@ -1052,6 +1126,7 @@ export default function Index() {
                                         Hunian{" "}
                                         <span className="text-rose-500">*</span>
                                     </label>
+
                                     <select
                                         id="hunian_id"
                                         value={form.data.hunian_id}
@@ -1075,11 +1150,13 @@ export default function Index() {
                                             </option>
                                         ))}
                                     </select>
+
                                     {form.errors.hunian_id && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.hunian_id}
                                         </p>
                                     )}
+
                                     {hunianOptions.length === 0 && (
                                         <p className="mt-1 text-xs text-amber-600">
                                             Belum ada pilihan hunian. Tambahkan
@@ -1096,6 +1173,7 @@ export default function Index() {
                                         Judul Laporan{" "}
                                         <span className="text-rose-500">*</span>
                                     </label>
+
                                     <input
                                         id="judul"
                                         type="text"
@@ -1112,6 +1190,7 @@ export default function Index() {
                                         placeholder="Contoh: Kerusakan atap rumah dinas"
                                         className={inputClass}
                                     />
+
                                     {form.errors.judul && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.judul}
@@ -1127,6 +1206,7 @@ export default function Index() {
                                         Tingkat Kerusakan{" "}
                                         <span className="text-rose-500">*</span>
                                     </label>
+
                                     <select
                                         id="jenis_kerusakan"
                                         value={form.data.jenis_kerusakan}
@@ -1143,6 +1223,7 @@ export default function Index() {
                                         <option value="ringan">Ringan</option>
                                         <option value="berat">Berat</option>
                                     </select>
+
                                     {form.errors.jenis_kerusakan && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.jenis_kerusakan}
@@ -1158,6 +1239,7 @@ export default function Index() {
                                         Status{" "}
                                         <span className="text-rose-500">*</span>
                                     </label>
+
                                     <select
                                         id="status"
                                         value={form.data.status}
@@ -1180,6 +1262,7 @@ export default function Index() {
                                         <option value="selesai">Selesai</option>
                                         <option value="ditolak">Ditolak</option>
                                     </select>
+
                                     {form.errors.status && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.status}
@@ -1195,6 +1278,7 @@ export default function Index() {
                                         Deskripsi{" "}
                                         <span className="text-rose-500">*</span>
                                     </label>
+
                                     <textarea
                                         id="deskripsi"
                                         value={form.data.deskripsi}
@@ -1210,6 +1294,7 @@ export default function Index() {
                                         placeholder="Jelaskan kerusakan atau pekerjaan yang diperlukan..."
                                         className={`${inputClass} resize-y`}
                                     />
+
                                     {form.errors.deskripsi && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.deskripsi}
@@ -1225,6 +1310,7 @@ export default function Index() {
                                         Tanggal Laporan{" "}
                                         <span className="text-rose-500">*</span>
                                     </label>
+
                                     <input
                                         id="tanggal_laporan"
                                         type="date"
@@ -1239,6 +1325,7 @@ export default function Index() {
                                         disabled={form.processing}
                                         className={inputClass}
                                     />
+
                                     {form.errors.tanggal_laporan && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.tanggal_laporan}
@@ -1253,6 +1340,7 @@ export default function Index() {
                                     >
                                         Tanggal Mulai
                                     </label>
+
                                     <input
                                         id="tanggal_mulai"
                                         type="date"
@@ -1266,6 +1354,7 @@ export default function Index() {
                                         disabled={form.processing}
                                         className={inputClass}
                                     />
+
                                     {form.errors.tanggal_mulai && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.tanggal_mulai}
@@ -1280,6 +1369,7 @@ export default function Index() {
                                     >
                                         Tanggal Selesai
                                     </label>
+
                                     <input
                                         id="tanggal_selesai"
                                         type="date"
@@ -1293,6 +1383,7 @@ export default function Index() {
                                         disabled={form.processing}
                                         className={inputClass}
                                     />
+
                                     {form.errors.tanggal_selesai && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.tanggal_selesai}
@@ -1307,6 +1398,7 @@ export default function Index() {
                                     >
                                         Estimasi Biaya (Rp)
                                     </label>
+
                                     <input
                                         id="estimasi_biaya"
                                         type="number"
@@ -1323,6 +1415,7 @@ export default function Index() {
                                         placeholder="0"
                                         className={inputClass}
                                     />
+
                                     {form.errors.estimasi_biaya && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.estimasi_biaya}
@@ -1337,6 +1430,7 @@ export default function Index() {
                                     >
                                         Realisasi Biaya (Rp)
                                     </label>
+
                                     <input
                                         id="realisasi_biaya"
                                         type="number"
@@ -1353,6 +1447,7 @@ export default function Index() {
                                         placeholder="0"
                                         className={inputClass}
                                     />
+
                                     {form.errors.realisasi_biaya && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.realisasi_biaya}
@@ -1367,6 +1462,7 @@ export default function Index() {
                                     >
                                         Keterangan Tambahan
                                     </label>
+
                                     <textarea
                                         id="keterangan"
                                         value={form.data.keterangan}
@@ -1381,6 +1477,7 @@ export default function Index() {
                                         placeholder="Catatan tambahan jika diperlukan..."
                                         className={`${inputClass} resize-y`}
                                     />
+
                                     {form.errors.keterangan && (
                                         <p className="mt-1 text-xs text-rose-600">
                                             {form.errors.keterangan}
@@ -1432,6 +1529,7 @@ export default function Index() {
 
             {/* =================================================
                 MODAL DETAIL
+                DAPAT DIAKSES SUPERADMIN DAN ANGGOTA
             ================================================= */}
 
             {modal === "detail" && selected && (
@@ -1450,6 +1548,7 @@ export default function Index() {
                                     {selected.judul}
                                 </h3>
                             </div>
+
                             <StatusBadge status={selected.status} />
                         </div>
 
@@ -1516,6 +1615,7 @@ export default function Index() {
                                             <Icon size={16} />
                                             {detail.label}
                                         </div>
+
                                         <p className="mt-2 break-words font-semibold text-slate-800 dark:text-white">
                                             {detail.value}
                                         </p>
@@ -1528,6 +1628,7 @@ export default function Index() {
                             <h4 className="mb-2 text-sm font-bold text-slate-800 dark:text-white">
                                 Deskripsi Kerusakan
                             </h4>
+
                             <p className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                                 {selected.deskripsi || "—"}
                             </p>
@@ -1537,6 +1638,7 @@ export default function Index() {
                             <h4 className="mb-2 text-sm font-bold text-slate-800 dark:text-white">
                                 Keterangan Tambahan
                             </h4>
+
                             <p className="whitespace-pre-wrap rounded-xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                                 {selected.keterangan || "—"}
                             </p>
@@ -1552,23 +1654,27 @@ export default function Index() {
                             Tutup
                         </button>
 
-                        <button
-                            type="button"
-                            onClick={() => openEdit(selected)}
-                            className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#0f2f5f] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#163f79]"
-                        >
-                            <Pencil size={16} />
-                            Edit Data
-                        </button>
+                        {/* Tombol edit di detail hanya untuk superadmin */}
+                        {isSuperadmin && (
+                            <button
+                                type="button"
+                                onClick={() => openEdit(selected)}
+                                className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#0f2f5f] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#163f79]"
+                            >
+                                <Pencil size={16} />
+                                Edit Data
+                            </button>
+                        )}
                     </div>
                 </Modal>
             )}
 
             {/* =================================================
                 MODAL DELETE
+                HANYA SUPERADMIN
             ================================================= */}
 
-            {modal === "delete" && selected && (
+            {isSuperadmin && modal === "delete" && selected && (
                 <Modal
                     title="Hapus Pemeliharaan"
                     description="Konfirmasi penghapusan data pemeliharaan."
@@ -1585,6 +1691,7 @@ export default function Index() {
                                 <p className="font-semibold text-slate-800 dark:text-white">
                                     Yakin ingin menghapus data ini?
                                 </p>
+
                                 <p className="mt-2 text-sm leading-relaxed text-slate-500 dark:text-slate-400">
                                     Data laporan{" "}
                                     <span className="font-semibold text-slate-700 dark:text-slate-200">

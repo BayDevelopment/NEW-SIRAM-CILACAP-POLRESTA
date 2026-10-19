@@ -9,7 +9,6 @@ import {
     Eye,
     Filter,
     Loader2,
-    Lock,
     Plus,
     Search,
     Trash2,
@@ -63,7 +62,12 @@ type Filters = {
     status_operasional: string;
 };
 
-type Stats = { tersedia: number; dihuni: number; perbaikan: number };
+type Stats = {
+    total: number;
+    tersedia: number;
+    dihuni: number;
+    perbaikan: number;
+};
 
 type Flash = {
     success?: string;
@@ -82,6 +86,7 @@ type PageProps = {
     units: Unit[];
     stats: Stats;
     filters: Filters;
+    can: { manage: boolean };
     flash?: Flash;
     auth?: { user?: AuthUser };
     errors?: Record<string, string>;
@@ -149,6 +154,17 @@ const STATUS: Record<string, string> = {
     dihuni: "Dihuni",
     perbaikan: "Perbaikan",
     tidak_layak: "Tidak Layak",
+};
+
+// Hunian baru: kerusakan dan perbaikan dicatat lewat menu Pemeliharaan,
+// status dihuni ditentukan lewat menu Penghunian.
+const KONDISI_BARU: Record<string, string> = {
+    baik: KONDISI.baik,
+};
+
+const STATUS_BARU: Record<string, string> = {
+    tersedia: STATUS.tersedia,
+    tidak_layak: STATUS.tidak_layak,
 };
 
 const inputBase =
@@ -398,13 +414,14 @@ function DetailItem({ label: text, value }: { label: string; value: string }) {
 ============================================================================ */
 
 export default function HunianIndex() {
-    const { hunian, units, stats, filters, flash, auth } =
+    const { hunian, units, stats, filters, can, flash, auth } =
         usePage<PageProps>().props;
 
     /* ------------------------------------------------------------------------
-       ROLE (superadmin & anggota)
-       - superadmin : semua unit
-       - anggota    : hanya unit miliknya (dibatasi juga di controller)
+       ROLE
+       - superadmin : melihat semua unit, boleh tambah / ubah / hapus
+       - anggota    : hanya melihat hunian satuannya sendiri
+       Keamanan sebenarnya ada di routes dan controller.
     ------------------------------------------------------------------------ */
 
     const rawRole = auth?.user?.role;
@@ -413,13 +430,7 @@ export default function HunianIndex() {
     const isSuperadmin = role === "superadmin";
     const isAnggota = role === "anggota";
 
-    const canManage = isSuperadmin || isAnggota;
-
-    const lockedUnitId =
-        isAnggota && auth?.user?.unit_id ? String(auth.user.unit_id) : null;
-
-    const unitName = (id: string) =>
-        units.find((unit) => String(unit.id) === id)?.nama_unit ?? "";
+    const canManage = can?.manage === true;
 
     const [modal, setModal] = useState<ModalState>(null);
 
@@ -433,6 +444,8 @@ export default function HunianIndex() {
     const [deleting, setDeleting] = useState(false);
 
     const form = useForm<HunianForm>(EMPTY_FORM);
+
+    const isCreate = modal?.type === "create";
 
     /* ------------------------------------------------------------------------
        FLASH TOAST
@@ -463,8 +476,7 @@ export default function HunianIndex() {
 
         form.setData({
             ...EMPTY_FORM,
-            unit_id:
-                lockedUnitId ?? (units.length > 0 ? String(units[0].id) : ""),
+            unit_id: units.length > 0 ? String(units[0].id) : "",
         });
 
         setModal({ type: "create" });
@@ -495,18 +507,14 @@ export default function HunianIndex() {
 
         if (!canManage) return;
 
-        // Anggota: unit dipaksa sesuai akun (controller juga memaksa).
-        const withUnit = (data: HunianForm): HunianForm =>
-            lockedUnitId ? { ...data, unit_id: lockedUnitId } : data;
+        // kode_hunian dibuat otomatis dan tidak boleh diubah.
+        form.transform((data) => {
+            const { kode_hunian: _kode, ...rest } = data;
+
+            return rest as HunianForm;
+        });
 
         if (modal?.type === "create") {
-            // kode_hunian dibuat otomatis oleh sistem.
-            form.transform((data) => {
-                const { kode_hunian: _kode, ...rest } = withUnit(data);
-
-                return rest as HunianForm;
-            });
-
             form.post("/hunian", {
                 preserveScroll: true,
                 onSuccess: closeModal,
@@ -516,8 +524,6 @@ export default function HunianIndex() {
         }
 
         if (modal?.type === "edit") {
-            form.transform((data) => withUnit(data));
-
             form.put(`/hunian/${modal.item.id}`, {
                 preserveScroll: true,
                 onSuccess: closeModal,
@@ -606,7 +612,7 @@ export default function HunianIndex() {
 
                         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
                             {isAnggota
-                                ? "Kelola data hunian pada satuan Anda."
+                                ? "Lihat data hunian pada satuan Anda."
                                 : "Kelola data rumah dinas, mes/asrama, dan apartemen."}
                         </p>
                     </div>
@@ -637,7 +643,7 @@ export default function HunianIndex() {
 
                             <p className="mt-1 text-sm">
                                 {isAnggota
-                                    ? "Satuan Anda tidak aktif atau belum tersedia. Hubungi superadmin."
+                                    ? "Satuan Anda tidak aktif atau belum tersedia. Hubungi Polresta."
                                     : "Tambahkan unit terlebih dahulu sebelum menambahkan data hunian."}
                             </p>
                         </div>
@@ -649,7 +655,7 @@ export default function HunianIndex() {
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <StatCard
                         title="Total Hunian"
-                        value={hunian.total}
+                        value={stats.total}
                         icon={<Building2 className="h-5 w-5" />}
                     />
 
@@ -758,11 +764,13 @@ export default function HunianIndex() {
 
                 <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
                     <div className="overflow-x-auto">
-                        <table className="w-full min-w-[1100px] text-left">
+                        <table className="w-full min-w-[900px] text-left">
                             <thead>
                                 <tr className="border-b border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950">
                                     <th className={th}>Hunian</th>
-                                    <th className={th}>Unit</th>
+                                    {isSuperadmin && (
+                                        <th className={th}>Unit</th>
+                                    )}
                                     <th className={th}>Jenis</th>
                                     <th className={th}>Kondisi</th>
                                     <th className={th}>Status</th>
@@ -774,7 +782,7 @@ export default function HunianIndex() {
                                 {hunian.data.length === 0 ? (
                                     <tr>
                                         <td
-                                            colSpan={6}
+                                            colSpan={isSuperadmin ? 6 : 5}
                                             className="px-5 py-12 text-center"
                                         >
                                             <Building2 className="mx-auto h-10 w-10 text-slate-300" />
@@ -784,7 +792,9 @@ export default function HunianIndex() {
                                             </p>
 
                                             <p className="mt-1 text-sm text-slate-500">
-                                                Silakan tambahkan data hunian.
+                                                {canManage
+                                                    ? "Silakan tambahkan data hunian."
+                                                    : "Belum ada data hunian pada satuan Anda."}
                                             </p>
                                         </td>
                                     </tr>
@@ -808,9 +818,12 @@ export default function HunianIndex() {
                                                 </p>
                                             </td>
 
-                                            <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-300">
-                                                {item.unit?.nama_unit ?? "-"}
-                                            </td>
+                                            {isSuperadmin && (
+                                                <td className="px-5 py-4 text-sm text-slate-700 dark:text-slate-300">
+                                                    {item.unit?.nama_unit ??
+                                                        "-"}
+                                                </td>
+                                            )}
 
                                             <td className="px-5 py-4">
                                                 <span className="rounded-lg bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
@@ -958,7 +971,7 @@ export default function HunianIndex() {
                 </div>
             </div>
 
-            {/* MODAL CREATE / EDIT */}
+            {/* MODAL CREATE / EDIT (khusus superadmin) */}
 
             <Modal
                 open={
@@ -984,35 +997,21 @@ export default function HunianIndex() {
                             required
                             error={form.errors.unit_id}
                         >
-                            {lockedUnitId ? (
-                                <div className="flex h-[42px] items-center justify-between rounded-xl border border-slate-200 bg-slate-100 px-3 dark:border-slate-700 dark:bg-slate-800">
-                                    <span className="truncate text-sm font-semibold text-slate-700 dark:text-slate-200">
-                                        {unitName(lockedUnitId) ||
-                                            "Satuan Anda"}
-                                    </span>
+                            <select
+                                value={form.data.unit_id}
+                                onChange={(event) =>
+                                    form.setData("unit_id", event.target.value)
+                                }
+                                className={selectBase}
+                            >
+                                <option value="">Pilih Unit</option>
 
-                                    <Lock className="h-4 w-4 shrink-0 text-slate-400" />
-                                </div>
-                            ) : (
-                                <select
-                                    value={form.data.unit_id}
-                                    onChange={(event) =>
-                                        form.setData(
-                                            "unit_id",
-                                            event.target.value,
-                                        )
-                                    }
-                                    className={selectBase}
-                                >
-                                    <option value="">Pilih Unit</option>
-
-                                    {units.map((unit) => (
-                                        <option key={unit.id} value={unit.id}>
-                                            {unit.nama_unit}
-                                        </option>
-                                    ))}
-                                </select>
-                            )}
+                                {units.map((unit) => (
+                                    <option key={unit.id} value={unit.id}>
+                                        {unit.nama_unit}
+                                    </option>
+                                ))}
+                            </select>
                         </Field>
 
                         <Field label="Kode Hunian">
@@ -1197,7 +1196,9 @@ export default function HunianIndex() {
                                 }
                                 className={selectBase}
                             >
-                                <Options map={KONDISI} />
+                                <Options
+                                    map={isCreate ? KONDISI_BARU : KONDISI}
+                                />
                             </select>
                         </Field>
 
@@ -1216,10 +1217,20 @@ export default function HunianIndex() {
                                 }
                                 className={selectBase}
                             >
-                                <Options map={STATUS} />
+                                <Options
+                                    map={isCreate ? STATUS_BARU : STATUS}
+                                />
                             </select>
                         </Field>
                     </div>
+
+                    {isCreate && (
+                        <p className="rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-400">
+                            Kerusakan dicatat melalui menu Pemeliharaan, dan
+                            status Dihuni diatur otomatis melalui menu
+                            Penghunian.
+                        </p>
+                    )}
 
                     <Field label="Keterangan" error={form.errors.keterangan}>
                         <textarea
@@ -1376,7 +1387,7 @@ export default function HunianIndex() {
                 )}
             </Modal>
 
-            {/* MODAL DELETE */}
+            {/* MODAL DELETE (khusus superadmin) */}
 
             <Modal
                 open={canManage && modal?.type === "delete"}

@@ -105,6 +105,10 @@ type PageProps = {
     anggotaOptions: Anggota[];
     hunianOptions: HunianOption[];
     filters: Filters;
+    can: {
+        manage_anggota: boolean;
+        manage_penghunian: boolean;
+    };
     flash?: {
         success?: string;
         error?: string;
@@ -153,11 +157,6 @@ const cardClass =
 const inputClass =
     "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-sm text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-[#0f2f5f] focus:ring-2 focus:ring-[#0f2f5f]/10 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 dark:disabled:bg-slate-800";
 
-/*
- * Animasi fade-in. Ditulis sebagai CSS biasa agar tidak bergantung pada
- * konfigurasi Tailwind. Boleh dipindahkan ke app.css jika ingin dipakai
- * di halaman lain.
- */
 const ANIMATION_CSS = `
 @keyframes pg-fade-in {
     from { opacity: 0; }
@@ -175,7 +174,10 @@ const ANIMATION_CSS = `
 .pg-fade-in-up { animation: pg-fade-in-up 350ms ease-out both; }
 .pg-pop-in { animation: pg-pop-in 220ms cubic-bezier(0.16, 1, 0.3, 1) both; }
 @media (prefers-reduced-motion: reduce) {
-    .pg-fade-in, .pg-fade-in-up, .pg-pop-in { animation: none; }
+    .pg-fade-in, .pg-fade-in-up, .pg-pop-in {
+        animation: none !important;
+        transition: none !important;
+    }
 }
 `;
 
@@ -290,7 +292,13 @@ function FormField({
     );
 }
 
-function EmptyOptionNotice({ type }: { type: "anggota" | "hunian" }) {
+function EmptyOptionNotice({
+    type,
+    canManageAnggota,
+}: {
+    type: "anggota" | "hunian";
+    canManageAnggota: boolean;
+}) {
     const isAnggota = type === "anggota";
 
     return (
@@ -301,25 +309,28 @@ function EmptyOptionNotice({ type }: { type: "anggota" | "hunian" }) {
                     : "Tidak ada hunian yang tersedia untuk ditempati. Hunian yang sudah dihuni atau sedang diperbaiki tidak ditampilkan."}
             </p>
 
-            <Link
-                href={isAnggota ? "/anggota" : "/hunian"}
-                className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#0f2f5f] underline underline-offset-4 hover:text-[#d4af37] dark:text-amber-300"
-            >
-                {isAnggota ? (
-                    <UserRound className="size-4" />
-                ) : (
-                    <Building2 className="size-4" />
-                )}
-                {isAnggota ? "Kelola data anggota" : "Kelola data hunian"}
-            </Link>
+            {isAnggota && !canManageAnggota ? (
+                <p className="mt-2 text-sm font-medium text-amber-900 dark:text-amber-200">
+                    Data anggota hanya dapat dikelola oleh superadmin. Hubungi
+                    superadmin untuk menambahkan anggota.
+                </p>
+            ) : (
+                <Link
+                    href={isAnggota ? "/anggota" : "/hunian"}
+                    className="mt-2 inline-flex items-center gap-1.5 text-sm font-semibold text-[#0f2f5f] underline underline-offset-4 hover:text-[#d4af37] dark:text-amber-300"
+                >
+                    {isAnggota ? (
+                        <UserRound className="size-4" />
+                    ) : (
+                        <Building2 className="size-4" />
+                    )}
+                    {isAnggota ? "Kelola data anggota" : "Kelola data hunian"}
+                </Link>
+            )}
         </div>
     );
 }
 
-/*
- * Dropdown dengan pencarian ke server (debounce 300 ms).
- * Cocok untuk data besar: hanya memuat sebagian kecil hasil per pencarian.
- */
 function SearchableSelect<T extends { id: number }>({
     endpoint,
     initialItems,
@@ -327,6 +338,7 @@ function SearchableSelect<T extends { id: number }>({
     onSelect,
     getLabel,
     placeholder,
+    editingId,
     disabled = false,
 }: {
     endpoint: string;
@@ -335,6 +347,7 @@ function SearchableSelect<T extends { id: number }>({
     onSelect: (item: T) => void;
     getLabel: (item: T) => string;
     placeholder: string;
+    editingId?: number | null;
     disabled?: boolean;
 }) {
     const [open, setOpen] = useState(false);
@@ -345,7 +358,10 @@ function SearchableSelect<T extends { id: number }>({
     const [current, setCurrent] = useState<T | null>(selected);
     const wrapperRef = useRef<HTMLDivElement>(null);
 
-    // Tutup saat klik di luar dropdown.
+    useEffect(() => {
+        setCurrent(selected);
+    }, [selected]);
+
     useEffect(() => {
         if (!open) return;
 
@@ -356,10 +372,10 @@ function SearchableSelect<T extends { id: number }>({
         };
 
         document.addEventListener("mousedown", handler);
+
         return () => document.removeEventListener("mousedown", handler);
     }, [open]);
 
-    // Ambil data dari server saat pengguna mengetik.
     useEffect(() => {
         if (!open) return;
 
@@ -370,32 +386,44 @@ function SearchableSelect<T extends { id: number }>({
         }
 
         const controller = new AbortController();
+
         setLoading(true);
 
         const timer = setTimeout(async () => {
             try {
-                const response = await fetch(
-                    `${endpoint}?q=${encodeURIComponent(query.trim())}`,
-                    {
-                        signal: controller.signal,
-                        credentials: "same-origin",
-                        headers: {
-                            Accept: "application/json",
-                            "X-Requested-With": "XMLHttpRequest",
-                        },
+                const params = new URLSearchParams({ q: query.trim() });
+
+                if (editingId) {
+                    params.set("editing_id", String(editingId));
+                }
+
+                const response = await fetch(`${endpoint}?${params}`, {
+                    signal: controller.signal,
+                    credentials: "same-origin",
+                    headers: {
+                        Accept: "application/json",
+                        "X-Requested-With": "XMLHttpRequest",
                     },
-                );
+                });
 
-                if (!response.ok) throw new Error("Gagal memuat data");
+                if (!response.ok) {
+                    throw new Error("Gagal memuat data");
+                }
 
-                setItems(await response.json());
-                setActiveIndex(0);
+                const result = (await response.json()) as T[];
+
+                if (!controller.signal.aborted) {
+                    setItems(result);
+                    setActiveIndex(0);
+                }
             } catch (error) {
                 if ((error as Error).name !== "AbortError") {
                     toast.error("Gagal memuat data pencarian.");
                 }
             } finally {
-                if (!controller.signal.aborted) setLoading(false);
+                if (!controller.signal.aborted) {
+                    setLoading(false);
+                }
             }
         }, 300);
 
@@ -403,7 +431,7 @@ function SearchableSelect<T extends { id: number }>({
             clearTimeout(timer);
             controller.abort();
         };
-    }, [query, open, endpoint, initialItems]);
+    }, [query, open, endpoint, initialItems, editingId]);
 
     function choose(item: T) {
         setCurrent(item);
@@ -415,15 +443,19 @@ function SearchableSelect<T extends { id: number }>({
     function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
         if (event.key === "ArrowDown") {
             event.preventDefault();
-            setActiveIndex((index) => Math.min(index + 1, items.length - 1));
+            setActiveIndex((index) =>
+                Math.min(index + 1, Math.max(items.length - 1, 0)),
+            );
         } else if (event.key === "ArrowUp") {
             event.preventDefault();
             setActiveIndex((index) => Math.max(index - 1, 0));
         } else if (event.key === "Enter") {
             event.preventDefault();
-            if (items[activeIndex]) choose(items[activeIndex]);
+
+            if (items[activeIndex]) {
+                choose(items[activeIndex]);
+            }
         } else if (event.key === "Escape") {
-            // Cegah modal ikut tertutup.
             event.stopPropagation();
             setOpen(false);
         }
@@ -443,8 +475,11 @@ function SearchableSelect<T extends { id: number }>({
                 <span className={`truncate ${current ? "" : "text-slate-400"}`}>
                     {current ? getLabel(current) : placeholder}
                 </span>
+
                 <ChevronDown
-                    className={`size-4 shrink-0 text-slate-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+                    className={`size-4 shrink-0 text-slate-400 transition-transform duration-200 ${
+                        open ? "rotate-180" : ""
+                    }`}
                 />
             </button>
 
@@ -484,7 +519,11 @@ function SearchableSelect<T extends { id: number }>({
                                             index === activeIndex
                                                 ? "bg-blue-50 text-[#0f2f5f] dark:bg-blue-950/40 dark:text-blue-200"
                                                 : "text-slate-700 dark:text-slate-200"
-                                        } ${current?.id === item.id ? "font-semibold" : ""}`}
+                                        } ${
+                                            current?.id === item.id
+                                                ? "font-semibold"
+                                                : ""
+                                        }`}
                                     >
                                         {getLabel(item)}
                                     </button>
@@ -510,20 +549,22 @@ function Pagination({ data }: { data: Paginated<Penghunian> }) {
 
             <div className="flex flex-wrap items-center gap-1">
                 {data.links.map((link, index) => {
+                    const label = link.label
+                        .replace(/<[^>]*>/g, "")
+                        .replace(/&laquo;/g, "«")
+                        .replace(/&raquo;/g, "»")
+                        .replace(/&amp;/g, "&")
+                        .trim();
+
                     const isPrevious =
-                        link.label.toLowerCase().includes("previous") ||
-                        link.label.includes("Sebelumnya") ||
-                        link.label.includes("laquo");
+                        label.toLowerCase().includes("previous") ||
+                        label.toLowerCase().includes("sebelumnya") ||
+                        label.includes("«");
 
                     const isNext =
-                        link.label.toLowerCase().includes("next") ||
-                        link.label.includes("Berikutnya") ||
-                        link.label.includes("raquo");
-
-                    const label = link.label
-                        .replace(/&laquo;|&raquo;|&#039;|&amp;/g, "")
-                        .replace(/<[^>]*>/g, "")
-                        .trim();
+                        label.toLowerCase().includes("next") ||
+                        label.toLowerCase().includes("berikutnya") ||
+                        label.includes("»");
 
                     return (
                         <button
@@ -576,6 +617,7 @@ function DetailItem({ label, value }: { label: string; value?: ReactNode }) {
             <p className="text-xs font-medium uppercase tracking-wide text-slate-400">
                 {label}
             </p>
+
             <div className="break-words text-sm font-medium text-slate-800 dark:text-slate-100">
                 {value || "—"}
             </div>
@@ -613,6 +655,7 @@ function StatCard({
                     </p>
                     <p className="mt-1 text-xs text-slate-400">{description}</p>
                 </div>
+
                 <div className={`rounded-xl p-3 ${accent}`}>
                     <Icon className="size-5" />
                 </div>
@@ -622,14 +665,22 @@ function StatCard({
 }
 
 export default function PenghunianIndex() {
-    const { penghunian, stats, anggotaOptions, hunianOptions, filters, flash } =
-        usePage<PageProps>().props;
+    const {
+        penghunian,
+        stats,
+        anggotaOptions,
+        hunianOptions,
+        filters,
+        can,
+        flash,
+    } = usePage<PageProps>().props;
+
+    const canManageAnggota = can?.manage_anggota === true;
+    const canManagePenghunian = can?.manage_penghunian === true;
 
     const [modal, setModal] = useState<ModalState>(null);
     const [search, setSearch] = useState(filters.search ?? "");
     const [statusFilter, setStatusFilter] = useState(filters.status ?? "");
-
-    // Dinaikkan tiap modal form dibuka agar dropdown pencarian ter-reset.
     const [formKey, setFormKey] = useState(0);
 
     const form = useForm<FormDataPenghunian>({ ...EMPTY_FORM });
@@ -638,8 +689,10 @@ export default function PenghunianIndex() {
     const isFormModal = modal?.type === "create" || modal?.type === "edit";
     const isCreating = modal?.type === "create";
 
-    // Tombol "Tambah" hanya aktif jika ada anggota dan hunian yang tersedia.
-    const canCreate = anggotaOptions.length > 0 && hunianOptions.length > 0;
+    const canCreate =
+        canManagePenghunian &&
+        anggotaOptions.length > 0 &&
+        hunianOptions.length > 0;
 
     useEffect(() => {
         if (flash?.success) toast.success(flash.success);
@@ -657,11 +710,19 @@ export default function PenghunianIndex() {
         };
 
         window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
+
+        return () => {
+            window.removeEventListener("keydown", handleKeyDown);
+        };
     }, [modal]);
 
     function openCreate() {
-        if (!canCreate) {
+        if (!canManagePenghunian) {
+            toast.error("Anda tidak memiliki izin mengelola penghunian.");
+            return;
+        }
+
+        if (anggotaOptions.length === 0 || hunianOptions.length === 0) {
             toast.error("Belum ada anggota atau hunian yang tersedia.");
             return;
         }
@@ -674,11 +735,22 @@ export default function PenghunianIndex() {
         form.reset();
         form.clearErrors();
         form.setData({ ...EMPTY_FORM });
+
         setFormKey((key) => key + 1);
         setModal({ type: "create" });
     }
 
     function openEdit(item: Penghunian) {
+        if (!canManagePenghunian) {
+            toast.error("Anda tidak memiliki izin mengedit penghunian.");
+            return;
+        }
+
+        form.transform((data) => {
+            const { _method, ...payload } = data;
+            return payload;
+        });
+
         form.clearErrors();
 
         form.setData({
@@ -696,6 +768,15 @@ export default function PenghunianIndex() {
         setModal({ type: "edit", item });
     }
 
+    function openDelete(item: Penghunian) {
+        if (!canManagePenghunian) {
+            toast.error("Anda tidak memiliki izin menghapus penghunian.");
+            return;
+        }
+
+        setModal({ type: "delete", item });
+    }
+
     function closeModal() {
         setModal(null);
         form.clearErrors();
@@ -703,6 +784,11 @@ export default function PenghunianIndex() {
 
     function submitForm(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
+
+        if (!canManagePenghunian) {
+            toast.error("Anda tidak memiliki izin menyimpan penghunian.");
+            return;
+        }
 
         if (form.processing) return;
 
@@ -734,7 +820,11 @@ export default function PenghunianIndex() {
 
             form.transform((data) => {
                 const { _method, ...payload } = data;
-                return { ...payload, _method: "put" as const };
+
+                return {
+                    ...payload,
+                    _method: "put" as const,
+                };
             });
 
             form.post(`/penghunian/${itemId}`, {
@@ -745,6 +835,7 @@ export default function PenghunianIndex() {
                         const { _method, ...payload } = data;
                         return payload;
                     });
+
                     closeModal();
                     form.reset();
                 },
@@ -753,9 +844,17 @@ export default function PenghunianIndex() {
     }
 
     function deleteItem(item: Penghunian) {
+        if (!canManagePenghunian) {
+            toast.error("Anda tidak memiliki izin menghapus penghunian.");
+            return;
+        }
+
         router.delete(`/penghunian/${item.id}`, {
             preserveScroll: true,
             onSuccess: () => setModal(null),
+            onError: () => {
+                toast.error("Data penghunian gagal dihapus.");
+            },
         });
     }
 
@@ -785,10 +884,12 @@ export default function PenghunianIndex() {
                         <div className="rounded-2xl bg-[#0f2f5f] p-3 text-white shadow-sm">
                             <Home className="size-6" />
                         </div>
+
                         <div>
                             <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
                                 Data Penghunian
                             </h1>
+
                             <p className="mt-1 max-w-2xl text-sm text-slate-500 dark:text-slate-400">
                                 Kelola penempatan anggota pada hunian, periode
                                 tinggal, status, dan dokumen perjanjian.
@@ -796,22 +897,24 @@ export default function PenghunianIndex() {
                         </div>
                     </div>
 
-                    <ActionButton
-                        variant="primary"
-                        onClick={openCreate}
-                        disabled={!canCreate}
-                        title={
-                            !canCreate
-                                ? "Anggota atau hunian yang tersedia belum ada"
-                                : undefined
-                        }
-                    >
-                        <Plus className="size-4" />
-                        Tambah Penghunian
-                    </ActionButton>
+                    {canManagePenghunian && (
+                        <ActionButton
+                            variant="primary"
+                            onClick={openCreate}
+                            disabled={!canCreate}
+                            title={
+                                !canCreate
+                                    ? "Anggota atau hunian yang tersedia belum ada"
+                                    : undefined
+                            }
+                        >
+                            <Plus className="size-4" />
+                            Tambah Penghunian
+                        </ActionButton>
+                    )}
                 </div>
 
-                {!canCreate && (
+                {!canCreate && canManagePenghunian && (
                     <div
                         className={`${cardClass} pg-fade-in space-y-3 border-amber-200 p-4 dark:border-amber-900`}
                     >
@@ -831,10 +934,17 @@ export default function PenghunianIndex() {
 
                         <div className="grid gap-3 md:grid-cols-2">
                             {anggotaOptions.length === 0 && (
-                                <EmptyOptionNotice type="anggota" />
+                                <EmptyOptionNotice
+                                    type="anggota"
+                                    canManageAnggota={canManageAnggota}
+                                />
                             )}
+
                             {hunianOptions.length === 0 && (
-                                <EmptyOptionNotice type="hunian" />
+                                <EmptyOptionNotice
+                                    type="hunian"
+                                    canManageAnggota={canManageAnggota}
+                                />
                             )}
                         </div>
                     </div>
@@ -849,6 +959,7 @@ export default function PenghunianIndex() {
                         accent="bg-blue-50 text-[#0f2f5f] dark:bg-blue-950/40 dark:text-blue-300"
                         delay={0}
                     />
+
                     <StatCard
                         title="Aktif"
                         value={stats.aktif}
@@ -857,6 +968,7 @@ export default function PenghunianIndex() {
                         accent="bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
                         delay={60}
                     />
+
                     <StatCard
                         title="Selesai"
                         value={stats.selesai}
@@ -865,6 +977,7 @@ export default function PenghunianIndex() {
                         accent="bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
                         delay={120}
                     />
+
                     <StatCard
                         title="Dibatalkan"
                         value={stats.dibatalkan}
@@ -896,8 +1009,9 @@ export default function PenghunianIndex() {
                                         setSearch(event.target.value)
                                     }
                                     onKeyDown={(event) => {
-                                        if (event.key === "Enter")
+                                        if (event.key === "Enter") {
                                             applyFilters();
+                                        }
                                     }}
                                     placeholder="Cari penghunian..."
                                     className={`${inputClass} min-w-0 pl-9 sm:w-64`}
@@ -913,6 +1027,7 @@ export default function PenghunianIndex() {
                                 className={`${inputClass} sm:w-40`}
                             >
                                 <option value="">Semua status</option>
+
                                 {STATUS_OPTIONS.map((option) => (
                                     <option
                                         key={option.value}
@@ -956,12 +1071,15 @@ export default function PenghunianIndex() {
                                                 <div className="rounded-2xl bg-slate-100 p-4 dark:bg-slate-800">
                                                     <Home className="size-7 text-slate-400" />
                                                 </div>
+
                                                 <p className="mt-3 font-semibold text-slate-700 dark:text-slate-200">
                                                     Belum ada data penghunian
                                                 </p>
+
                                                 <p className="mt-1 text-sm text-slate-500">
-                                                    Tambahkan penghunian setelah
-                                                    anggota dan hunian tersedia.
+                                                    {canManagePenghunian
+                                                        ? "Tambahkan penghunian setelah anggota dan hunian tersedia."
+                                                        : "Belum ada penghunian pada unit Anda."}
                                                 </p>
                                             </div>
                                         </td>
@@ -980,12 +1098,14 @@ export default function PenghunianIndex() {
                                                     <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-[#0f2f5f] dark:bg-blue-950/50 dark:text-blue-300">
                                                         <UserRound className="size-5" />
                                                     </div>
+
                                                     <div>
                                                         <p className="font-semibold text-slate-800 dark:text-slate-100">
                                                             {item.anggota
                                                                 ?.nama_lengkap ??
                                                                 "Anggota tidak ditemukan"}
                                                         </p>
+
                                                         <p className="mt-1 text-xs text-slate-500">
                                                             NRP:{" "}
                                                             {item.anggota
@@ -1000,10 +1120,12 @@ export default function PenghunianIndex() {
                                                     {item.hunian?.kode_hunian ??
                                                         "—"}
                                                 </p>
+
                                                 <p className="mt-1 text-xs text-slate-500">
                                                     {item.hunian?.nama_hunian ??
                                                         "Hunian tidak ditemukan"}
                                                 </p>
+
                                                 {item.hunian?.unit
                                                     ?.nama_unit && (
                                                     <p className="mt-1 text-xs text-slate-400">
@@ -1059,9 +1181,11 @@ export default function PenghunianIndex() {
 
                                             <td className="px-5 py-4">
                                                 <div className="flex justify-end gap-1.5">
+                                                    {/* Detail untuk semua role yang memiliki akses halaman */}
                                                     <button
                                                         type="button"
                                                         title="Detail"
+                                                        aria-label="Lihat detail penghunian"
                                                         onClick={() =>
                                                             setModal({
                                                                 type: "detail",
@@ -1072,29 +1196,39 @@ export default function PenghunianIndex() {
                                                     >
                                                         <Eye className="size-4" />
                                                     </button>
-                                                    <button
-                                                        type="button"
-                                                        title="Edit"
-                                                        onClick={() =>
-                                                            openEdit(item)
-                                                        }
-                                                        className="rounded-lg p-2 text-slate-500 transition hover:bg-amber-50 hover:text-amber-700 dark:hover:bg-amber-950/40"
-                                                    >
-                                                        <Pencil className="size-4" />
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        title="Hapus"
-                                                        onClick={() =>
-                                                            setModal({
-                                                                type: "delete",
-                                                                item,
-                                                            })
-                                                        }
-                                                        className="rounded-lg p-2 text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
-                                                    >
-                                                        <Trash2 className="size-4" />
-                                                    </button>
+
+                                                    {/* Edit dan hapus berdasarkan izin backend */}
+                                                    {canManagePenghunian && (
+                                                        <>
+                                                            <button
+                                                                type="button"
+                                                                title="Edit"
+                                                                aria-label="Edit penghunian"
+                                                                onClick={() =>
+                                                                    openEdit(
+                                                                        item,
+                                                                    )
+                                                                }
+                                                                className="rounded-lg p-2 text-slate-500 transition hover:bg-amber-50 hover:text-amber-700 dark:hover:bg-amber-950/40"
+                                                            >
+                                                                <Pencil className="size-4" />
+                                                            </button>
+
+                                                            <button
+                                                                type="button"
+                                                                title="Hapus"
+                                                                aria-label="Hapus penghunian"
+                                                                onClick={() =>
+                                                                    openDelete(
+                                                                        item,
+                                                                    )
+                                                                }
+                                                                className="rounded-lg p-2 text-slate-500 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-950/40"
+                                                            >
+                                                                <Trash2 className="size-4" />
+                                                            </button>
+                                                        </>
+                                                    )}
                                                 </div>
                                             </td>
                                         </tr>
@@ -1108,7 +1242,8 @@ export default function PenghunianIndex() {
                 </section>
             </div>
 
-            {isFormModal && (
+            {/* MODAL CREATE / EDIT */}
+            {canManagePenghunian && isFormModal && (
                 <div
                     className="pg-fade-in fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4 backdrop-blur-sm"
                     onMouseDown={(event) => {
@@ -1131,11 +1266,13 @@ export default function PenghunianIndex() {
                                         ? "Tambah Penghunian"
                                         : "Edit Penghunian"}
                                 </h2>
+
                                 <p className="mt-1 text-sm text-slate-500">
                                     Lengkapi anggota, hunian, periode, dan
                                     informasi penghunian.
                                 </p>
                             </div>
+
                             <button
                                 type="button"
                                 onClick={closeModal}
@@ -1162,6 +1299,7 @@ export default function PenghunianIndex() {
                                         endpoint="/penghunian/options/anggota"
                                         initialItems={anggotaOptions}
                                         selected={editingItem?.anggota ?? null}
+                                        editingId={editingItem?.id ?? null}
                                         onSelect={(item) =>
                                             form.setData(
                                                 "anggota_id",
@@ -1188,6 +1326,7 @@ export default function PenghunianIndex() {
                                         endpoint="/penghunian/options/hunian"
                                         initialItems={hunianOptions}
                                         selected={editingItem?.hunian ?? null}
+                                        editingId={editingItem?.id ?? null}
                                         onSelect={(item) =>
                                             form.setData(
                                                 "hunian_id",
@@ -1222,6 +1361,7 @@ export default function PenghunianIndex() {
                                         }
                                         className={inputClass}
                                         required
+                                        disabled={form.processing}
                                     />
                                 </FormField>
 
@@ -1244,6 +1384,7 @@ export default function PenghunianIndex() {
                                         }
                                         className={inputClass}
                                         required
+                                        disabled={form.processing}
                                     />
                                 </FormField>
 
@@ -1262,6 +1403,7 @@ export default function PenghunianIndex() {
                                         }
                                         className={inputClass}
                                         required
+                                        disabled={form.processing}
                                     >
                                         {STATUS_OPTIONS.map((option) => (
                                             <option
@@ -1287,8 +1429,10 @@ export default function PenghunianIndex() {
                                                 event.target.files?.[0] ?? null,
                                             )
                                         }
+                                        disabled={form.processing}
                                         className={`${inputClass} file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-1.5 file:text-xs file:font-semibold dark:file:bg-slate-800`}
                                     />
+
                                     <p className="text-xs text-slate-400">
                                         PDF, JPG, JPEG, PNG. Maksimal 5 MB.
                                     </p>
@@ -1309,6 +1453,7 @@ export default function PenghunianIndex() {
                                                     event.target.value,
                                                 )
                                             }
+                                            disabled={form.processing}
                                             className={inputClass}
                                             placeholder="Masukkan alasan penghunian..."
                                         />
@@ -1330,6 +1475,7 @@ export default function PenghunianIndex() {
                                                     event.target.value,
                                                 )
                                             }
+                                            disabled={form.processing}
                                             className={inputClass}
                                             placeholder="Keterangan tambahan (opsional)"
                                         />
@@ -1361,6 +1507,7 @@ export default function PenghunianIndex() {
                                 >
                                     Batal
                                 </ActionButton>
+
                                 <button
                                     type="submit"
                                     disabled={form.processing}
@@ -1378,6 +1525,7 @@ export default function PenghunianIndex() {
                 </div>
             )}
 
+            {/* MODAL DETAIL */}
             {modal?.type === "detail" && (
                 <div
                     className="pg-fade-in fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4 backdrop-blur-sm"
@@ -1395,14 +1543,17 @@ export default function PenghunianIndex() {
                                 <h2 className="text-lg font-bold text-slate-900 dark:text-white">
                                     Detail Penghunian
                                 </h2>
+
                                 <p className="mt-1 text-sm text-slate-500">
                                     Informasi lengkap catatan penghunian.
                                 </p>
                             </div>
+
                             <button
                                 type="button"
                                 onClick={closeModal}
                                 className="rounded-xl p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                aria-label="Tutup detail"
                             >
                                 <X className="size-5" />
                             </button>
@@ -1413,40 +1564,49 @@ export default function PenghunianIndex() {
                                 label="Nama Anggota"
                                 value={modal.item.anggota?.nama_lengkap}
                             />
+
                             <DetailItem
                                 label="NRP"
                                 value={modal.item.anggota?.nrp}
                             />
+
                             <DetailItem
                                 label="Kode Hunian"
                                 value={modal.item.hunian?.kode_hunian}
                             />
+
                             <DetailItem
                                 label="Nama Hunian"
                                 value={modal.item.hunian?.nama_hunian}
                             />
+
                             <DetailItem
                                 label="Unit / Satuan"
                                 value={modal.item.hunian?.unit?.nama_unit}
                             />
+
                             <DetailItem
                                 label="Status"
                                 value={
                                     <StatusBadge status={modal.item.status} />
                                 }
                             />
+
                             <DetailItem
                                 label="Tanggal Mulai"
                                 value={formatDate(modal.item.tanggal_mulai)}
                             />
+
                             <DetailItem
                                 label="Tanggal Selesai"
                                 value={formatDate(modal.item.tanggal_selesai)}
                             />
+
                             <DetailItem
                                 label="Disetujui Oleh"
                                 value={modal.item.penyetuju?.name}
                             />
+
                             <DetailItem
                                 label="Tanggal Persetujuan"
                                 value={formatDateTime(modal.item.disetujui_at)}
@@ -1458,12 +1618,14 @@ export default function PenghunianIndex() {
                                     value={modal.item.alasan_penghunian}
                                 />
                             </div>
+
                             <div className="sm:col-span-2">
                                 <DetailItem
                                     label="Keterangan"
                                     value={modal.item.keterangan}
                                 />
                             </div>
+
                             <div className="sm:col-span-2">
                                 <DetailItem
                                     label="Dokumen Perjanjian"
@@ -1499,7 +1661,8 @@ export default function PenghunianIndex() {
                 </div>
             )}
 
-            {modal?.type === "delete" && (
+            {/* MODAL DELETE */}
+            {canManagePenghunian && modal?.type === "delete" && (
                 <div
                     className="pg-fade-in fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 backdrop-blur-sm"
                     onMouseDown={(event) => {
@@ -1509,13 +1672,17 @@ export default function PenghunianIndex() {
                     <section
                         role="dialog"
                         aria-modal="true"
+                        aria-labelledby="delete-penghunian-title"
                         className={`${cardClass} pg-pop-in w-full max-w-md p-6`}
                     >
                         <div className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-rose-50 text-rose-600 dark:bg-rose-950/40">
                             <Trash2 className="size-6" />
                         </div>
 
-                        <h2 className="mt-4 text-center text-lg font-bold text-slate-900 dark:text-white">
+                        <h2
+                            id="delete-penghunian-title"
+                            className="mt-4 text-center text-lg font-bold text-slate-900 dark:text-white"
+                        >
                             Hapus Data Penghunian?
                         </h2>
 
@@ -1528,18 +1695,19 @@ export default function PenghunianIndex() {
                             <strong>
                                 {modal.item.hunian?.kode_hunian ?? "—"}
                             </strong>{" "}
-                            akan dihapus dari daftar aktif.
+                            akan dihapus dari daftar.
                         </p>
 
                         <p className="mt-2 text-center text-xs text-slate-400">
-                            Tindakan ini menggunakan soft delete sesuai
-                            controller.
+                            Data dapat dipulihkan oleh administrator karena
+                            memakai soft delete.
                         </p>
 
                         <div className="mt-6 flex justify-center gap-2">
                             <ActionButton onClick={closeModal}>
                                 Batal
                             </ActionButton>
+
                             <ActionButton
                                 variant="danger"
                                 onClick={() => deleteItem(modal.item)}

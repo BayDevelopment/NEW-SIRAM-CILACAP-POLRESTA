@@ -22,7 +22,20 @@ class HunianController extends Controller
     ];
 
     /**
-     * Unit yang boleh diakses user.
+     * Hanya Superadmin (Polresta) yang boleh mengelola hunian.
+     * Anggota (Polsek) hanya boleh melihat.
+     */
+    private function ensureSuperadmin(Request $request): void
+    {
+        abort_if(
+            $request->user()?->role !== 'superadmin',
+            403,
+            'Anda hanya memiliki akses melihat data hunian.'
+        );
+    }
+
+    /**
+     * Unit yang boleh dilihat user.
      * - superadmin : null (semua unit)
      * - anggota    : unit_id miliknya (wajib terhubung ke unit)
      */
@@ -44,33 +57,49 @@ class HunianController extends Controller
     }
 
     /**
-     * Pastikan hunian berada pada unit yang boleh diakses user.
+     * Aturan validasi store dan update.
+     * kode_hunian sengaja tidak ada: dibuat otomatis oleh sistem.
      */
-    private function authorizeUnit(Request $request, Hunian $hunian): void
-    {
-        $unitId = $this->scopedUnitId($request);
-
-        abort_if(
-            $unitId !== null && (int) $hunian->unit_id !== $unitId,
-            403,
-            'Anda tidak memiliki akses ke hunian satuan lain.'
-        );
-    }
-
-    /**
-     * Aturan validasi unit_id.
-     */
-    private function unitRule(): array
+    private function baseRules(): array
     {
         return [
-            'required',
-            'integer',
-            Rule::exists('units', 'id'),
+            'unit_id' => ['required', 'integer', Rule::exists('units', 'id')],
+
+            'jenis_hunian' => [
+                'required',
+                Rule::in(['rumah_dinas', 'mes', 'apartemen']),
+            ],
+
+            'nama_hunian' => ['required', 'string', 'max:150'],
+            'alamat' => ['required', 'string', 'max:255'],
+            'blok' => ['nullable', 'string', 'max:50'],
+            'nomor' => ['nullable', 'string', 'max:50'],
+            'lantai' => ['nullable', 'integer', 'min:0'],
+            'jumlah_kamar' => ['required', 'integer', 'min:1'],
+            'luas_bangunan' => ['nullable', 'numeric', 'min:0'],
+            'luas_tanah' => ['nullable', 'numeric', 'min:0'],
+
+            'kondisi' => [
+                'required',
+                Rule::in(['baik', 'rusak_ringan', 'rusak_berat']),
+            ],
+
+            'status_operasional' => [
+                'required',
+                Rule::in([
+                    'tersedia',
+                    'dihuni',
+                    'perbaikan',
+                    'tidak_layak',
+                ]),
+            ],
+
+            'keterangan' => ['nullable', 'string'],
         ];
     }
 
     /**
-     * Menampilkan data hunian.
+     * Menampilkan data hunian (Superadmin dan Anggota).
      */
     public function index(Request $request): Response
     {
@@ -125,7 +154,7 @@ class HunianController extends Controller
             ->orderBy('nama_unit')
             ->get();
 
-        // Statistik keseluruhan (bukan hanya halaman aktif).
+        // Statistik keseluruhan (tidak ikut filter dan pagination).
         $stats = Hunian::query()
             ->when(
                 $unitId,
@@ -139,6 +168,7 @@ class HunianController extends Controller
             'hunian' => $hunian,
             'units' => $units,
             'stats' => [
+                'total' => (int) $stats->sum(),
                 'tersedia' => (int) ($stats['tersedia'] ?? 0),
                 'dihuni' => (int) ($stats['dihuni'] ?? 0),
                 'perbaikan' => (int) ($stats['perbaikan'] ?? 0),
@@ -152,58 +182,25 @@ class HunianController extends Controller
                     ''
                 ),
             ],
+            'can' => [
+                'manage' => $request->user()->role === 'superadmin',
+            ],
         ]);
     }
 
     /**
-     * Menyimpan hunian baru.
+     * Menyimpan hunian baru (khusus Superadmin).
+     * kode_hunian dibuat otomatis oleh event creating di model Hunian.
      */
     public function store(Request $request): RedirectResponse
     {
-        $unitId = $this->scopedUnitId($request);
+        $this->ensureSuperadmin($request);
 
-        $validated = $request->validate([
-            'unit_id' => $this->unitRule(),
+        $validated = $request->validate($this->baseRules());
 
-            'jenis_hunian' => [
-                'required',
-                Rule::in(['rumah_dinas', 'mes', 'apartemen']),
-            ],
-
-            'nama_hunian' => ['required', 'string', 'max:150'],
-            'alamat' => ['required', 'string', 'max:255'],
-            'blok' => ['nullable', 'string', 'max:50'],
-            'nomor' => ['nullable', 'string', 'max:50'],
-            'lantai' => ['nullable', 'integer', 'min:0'],
-            'jumlah_kamar' => ['required', 'integer', 'min:1'],
-            'luas_bangunan' => ['nullable', 'numeric', 'min:0'],
-            'luas_tanah' => ['nullable', 'numeric', 'min:0'],
-
-            'kondisi' => [
-                'required',
-                Rule::in(['baik', 'rusak_ringan', 'rusak_berat']),
-            ],
-
-            'status_operasional' => [
-                'required',
-                Rule::in([
-                    'tersedia',
-                    'dihuni',
-                    'perbaikan',
-                    'tidak_layak',
-                ]),
-            ],
-
-            'keterangan' => ['nullable', 'string'],
-        ]);
-
-        // Anggota: unit selalu dipaksa mengikuti akun.
-        if ($unitId !== null) {
-            $validated['unit_id'] = $unitId;
-        }
-
-        // Jangan membuat hunian baru dengan status perbaikan
-        // atau kondisi rusak tanpa laporan pemeliharaan.
+        // Hunian baru hanya boleh tersedia atau tidak layak:
+        // - perbaikan / kondisi rusak lewat laporan Pemeliharaan.
+        // - dihuni lewat data Penghunian.
         if (
             $validated['status_operasional'] === 'perbaikan'
             || in_array(
@@ -218,6 +215,13 @@ class HunianController extends Controller
             ]);
         }
 
+        if ($validated['status_operasional'] === 'dihuni') {
+            throw ValidationException::withMessages([
+                'status_operasional' =>
+                'Hunian baru tidak dapat langsung berstatus dihuni. Buat data penghunian setelah hunian tersimpan.',
+            ]);
+        }
+
         Hunian::create($validated);
 
         return to_route('hunian.index')
@@ -225,62 +229,15 @@ class HunianController extends Controller
     }
 
     /**
-     * Memperbarui data hunian.
+     * Memperbarui data hunian (khusus Superadmin).
      */
     public function update(
         Request $request,
         Hunian $hunian
     ): RedirectResponse {
-        $this->authorizeUnit($request, $hunian);
+        $this->ensureSuperadmin($request);
 
-        $unitId = $this->scopedUnitId($request);
-
-        $validated = $request->validate([
-            'unit_id' => $this->unitRule(),
-
-            'kode_hunian' => [
-                'required',
-                'string',
-                'max:50',
-                Rule::unique('hunian', 'kode_hunian')->ignore($hunian->id),
-            ],
-
-            'jenis_hunian' => [
-                'required',
-                Rule::in(['rumah_dinas', 'mes', 'apartemen']),
-            ],
-
-            'nama_hunian' => ['required', 'string', 'max:150'],
-            'alamat' => ['required', 'string', 'max:255'],
-            'blok' => ['nullable', 'string', 'max:50'],
-            'nomor' => ['nullable', 'string', 'max:50'],
-            'lantai' => ['nullable', 'integer', 'min:0'],
-            'jumlah_kamar' => ['required', 'integer', 'min:1'],
-            'luas_bangunan' => ['nullable', 'numeric', 'min:0'],
-            'luas_tanah' => ['nullable', 'numeric', 'min:0'],
-
-            'kondisi' => [
-                'required',
-                Rule::in(['baik', 'rusak_ringan', 'rusak_berat']),
-            ],
-
-            'status_operasional' => [
-                'required',
-                Rule::in([
-                    'tersedia',
-                    'dihuni',
-                    'perbaikan',
-                    'tidak_layak',
-                ]),
-            ],
-
-            'keterangan' => ['nullable', 'string'],
-        ]);
-
-        // Anggota tidak boleh memindahkan hunian ke satuan lain.
-        if ($unitId !== null) {
-            $validated['unit_id'] = $unitId;
-        }
+        $validated = $request->validate($this->baseRules());
 
         DB::transaction(function () use ($validated, $hunian) {
             $current = Hunian::query()
@@ -306,16 +263,6 @@ class HunianController extends Controller
                     $maintenanceAktif->jenis_kerusakan === 'berat'
                     ? 'rusak_berat'
                     : 'rusak_ringan';
-
-                // Sinkronkan data lama yang belum sesuai laporan aktif.
-                if (
-                    $current->status_operasional !== 'perbaikan'
-                    || $current->kondisi !== $kondisiSeharusnya
-                ) {
-                    $current->kondisi = $kondisiSeharusnya;
-                    $current->status_operasional = 'perbaikan';
-                    $current->save();
-                }
 
                 // Tolak perubahan manual pada kondisi dan status.
                 if (
@@ -362,7 +309,7 @@ class HunianController extends Controller
                     $statusBaru === 'tersedia'
                     && Penghunian::query()
                     ->where('hunian_id', $current->id)
-                    ->where('status', 'aktif')
+                    ->where('status', Penghunian::STATUS_AKTIF)
                     ->exists()
                 ) {
                     throw ValidationException::withMessages([
@@ -380,13 +327,13 @@ class HunianController extends Controller
     }
 
     /**
-     * Menghapus data hunian.
+     * Menghapus data hunian (khusus Superadmin).
      */
     public function destroy(
         Request $request,
         Hunian $hunian
     ): RedirectResponse {
-        $this->authorizeUnit($request, $hunian);
+        $this->ensureSuperadmin($request);
 
         $sedangPemeliharaan = MaintenanceHunian::query()
             ->where('hunian_id', $hunian->id)
@@ -403,7 +350,7 @@ class HunianController extends Controller
         if (
             Penghunian::query()
             ->where('hunian_id', $hunian->id)
-            ->where('status', 'aktif')
+            ->where('status', Penghunian::STATUS_AKTIF)
             ->exists()
         ) {
             throw ValidationException::withMessages([

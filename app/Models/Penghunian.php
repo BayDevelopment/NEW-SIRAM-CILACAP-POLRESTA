@@ -2,12 +2,15 @@
 
 namespace App\Models;
 
+use App\Models\Scopes\UnitViaHunianScope;
+use Illuminate\Database\Eloquent\Attributes\ScopedBy;
 use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
+#[ScopedBy([UnitViaHunianScope::class])]
 class Penghunian extends Model
 {
     use SoftDeletes;
@@ -15,7 +18,9 @@ class Penghunian extends Model
     protected $table = 'penghunian';
 
     public const STATUS_AKTIF = 'aktif';
+
     public const STATUS_SELESAI = 'selesai';
+
     public const STATUS_DIBATALKAN = 'dibatalkan';
 
     public const STATUS = [
@@ -37,7 +42,9 @@ class Penghunian extends Model
         'disetujui_at',
     ];
 
-    protected $appends = ['dokumen_url'];
+    protected $appends = [
+        'dokumen_url',
+    ];
 
     protected function casts(): array
     {
@@ -48,48 +55,58 @@ class Penghunian extends Model
         ];
     }
 
-    /* ------------------------------------------------------------------
-     | RELATIONS
-     * ---------------------------------------------------------------- */
+    /*
+    |--------------------------------------------------------------------------
+    | RELATIONS
+    |--------------------------------------------------------------------------
+    */
 
     public function anggota(): BelongsTo
     {
-        return $this->belongsTo(Anggota::class, 'anggota_id');
+        return $this->belongsTo(
+            Anggota::class,
+            'anggota_id'
+        );
     }
 
     public function hunian(): BelongsTo
     {
-        return $this->belongsTo(Hunian::class, 'hunian_id');
+        return $this->belongsTo(
+            Hunian::class,
+            'hunian_id'
+        );
     }
 
     public function penyetuju(): BelongsTo
     {
-        return $this->belongsTo(User::class, 'disetujui_oleh');
-    }
-
-    /* ------------------------------------------------------------------
-     | ACCESSORS
-     * ---------------------------------------------------------------- */
-
-    /**
-     * URL dokumen perjanjian (butuh: php artisan storage:link).
-     */
-    protected function dokumenUrl(): Attribute
-    {
-        return Attribute::get(
-            fn() => $this->dokumen_perjanjian
-                ? asset('storage/' . $this->dokumen_perjanjian)
-                : null
+        return $this->belongsTo(
+            User::class,
+            'disetujui_oleh'
         );
     }
-    /**
-     * Dokumen yang berkaitan dengan penghunian ini.
-     */
+
     public function dokumen(): HasMany
     {
         return $this->hasMany(
             DokumenPenghunian::class,
             'penghunian_id'
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | ACCESSORS
+    |--------------------------------------------------------------------------
+    */
+
+    protected function dokumenUrl(): Attribute
+    {
+        return Attribute::get(
+            fn() => $this->dokumen_perjanjian
+                ? asset(
+                    'storage/' . $this->dokumen_perjanjian
+                )
+                : null
         );
     }
 }
